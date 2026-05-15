@@ -1,0 +1,1424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vendor Onboarding — Field Reference</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8fafc; color: #1e293b; }
+
+  header { background: #1e293b; color: white; padding: 24px 32px; }
+  header h1 { font-size: 20px; font-weight: 700; }
+  header p { font-size: 13px; color: #94a3b8; margin-top: 4px; }
+
+  .controls { padding: 16px 32px; background: white; border-bottom: 1px solid #e2e8f0; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; position: sticky; top: 0; z-index: 100; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+  .controls span { font-size: 12px; font-weight: 600; color: #64748b; margin-right: 4px; }
+
+  .filter-btn { padding: 5px 12px; border-radius: 20px; border: 1.5px solid #e2e8f0; background: white; font-size: 12px; cursor: pointer; font-weight: 500; color: #475569; transition: all 0.15s; }
+  .filter-btn:hover { background: #f1f5f9; }
+  .filter-btn.active { background: #1e293b; color: white; border-color: #1e293b; }
+
+  .legend { padding: 12px 32px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+  .legend span { font-size: 11px; color: #64748b; font-weight: 600; }
+
+  .table-wrap { padding: 24px 32px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.08); font-size: 13px; }
+  thead th { background: #1e293b; color: white; padding: 12px 14px; text-align: left; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; white-space: nowrap; }
+  tbody tr { border-bottom: 1px solid #f1f5f9; }
+  tbody tr:hover { background: #f8fafc; }
+  tbody tr.hidden { display: none; }
+  td { padding: 11px 14px; vertical-align: top; line-height: 1.5; }
+
+  .group-header td { background: #f1f5f9; font-weight: 700; font-size: 12px; color: #475569; letter-spacing: 0.04em; text-transform: uppercase; padding: 8px 14px; }
+
+  .field-name { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; color: #6366f1; font-weight: 600; white-space: nowrap; }
+  .field-label { font-weight: 500; color: #1e293b; }
+  .field-type { font-size: 11px; padding: 2px 7px; border-radius: 4px; background: #f1f5f9; color: #64748b; font-weight: 500; white-space: nowrap; display: inline-block; }
+
+  .check-list { list-style: none; padding: 0; }
+  .check-list li { padding: 2px 0; font-size: 12.5px; color: #374151; }
+  .check-list li::before { content: '• '; color: #94a3b8; }
+
+  /* Badge types */
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin: 2px 2px 2px 0; white-space: nowrap; }
+  .b-done   { background: #dcfce7; color: #166534; }   /* green — Phase 1 done */
+  .b-ocr    { background: #dbeafe; color: #1e40af; }   /* blue — OCR extract */
+  .b-ai     { background: #fef3c7; color: #92400e; }   /* amber — AI check */
+  .b-api    { background: #f3e8ff; color: #6b21a8; }   /* purple — external API */
+  .b-cross  { background: #fee2e2; color: #991b1b; }   /* red — cross-field */
+  .b-future { background: #f0fdf4; color: #14532d; border: 1px dashed #86efac; } /* future field */
+  .b-warn   { background: #fff7ed; color: #c2410c; }   /* warning only */
+  .b-none   { background: #f1f5f9; color: #94a3b8; }   /* no check */
+
+  .cross-pill { display: inline-block; font-family: monospace; font-size: 11px; background: #fef2f2; color: #dc2626; padding: 1px 6px; border-radius: 3px; margin: 1px; }
+  .future-field { font-size: 11.5px; color: #059669; font-style: italic; }
+
+  .na { color: #cbd5e1; font-size: 12px; }
+
+  @media (max-width: 900px) {
+    .table-wrap { padding: 12px; }
+    header, .controls, .legend { padding-left: 16px; padding-right: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Vendor Onboarding — Field Reference</h1>
+  <p>All 8 groups · Every field · Rule checks · OCR · AI · Cross-field · Future extensions</p>
+</header>
+
+<div class="controls">
+  <span>Filter:</span>
+  <button class="filter-btn active" onclick="filterGroup('all')">All Groups</button>
+  <button class="filter-btn" onclick="filterGroup('g1')">1 · Company</button>
+  <button class="filter-btn" onclick="filterGroup('g2')">2 · PAN</button>
+  <button class="filter-btn" onclick="filterGroup('g3')">3 · GST</button>
+  <button class="filter-btn" onclick="filterGroup('g4')">4 · IDs</button>
+  <button class="filter-btn" onclick="filterGroup('g5')">5 · Banking</button>
+  <button class="filter-btn" onclick="filterGroup('g6')">6 · ISO</button>
+  <button class="filter-btn" onclick="filterGroup('g7')">7 · Compliance</button>
+  <button class="filter-btn" onclick="filterGroup('g8')">8 · Contact</button>
+  <button class="filter-btn" onclick="filterGroup('g9')">9 · Documents</button>
+</div>
+
+<div class="legend">
+  <span>Legend:</span>
+  <span class="badge b-done">Phase 1 Done</span>
+  <span class="badge b-ocr">OCR Extract</span>
+  <span class="badge b-ai">AI Check</span>
+  <span class="badge b-api">External API</span>
+  <span class="badge b-cross">Cross-Field</span>
+  <span class="badge b-warn">Warning Only</span>
+  <span class="badge b-future">Future Field</span>
+  <span class="badge b-none">No Check</span>
+</div>
+
+<div class="table-wrap">
+<table id="mainTable">
+<thead>
+  <tr>
+    <th style="width:140px">Field (code)</th>
+    <th style="width:150px">Display Label</th>
+    <th style="width:80px">Type</th>
+    <th style="width:220px">Phase 1 — Rule Checks</th>
+    <th style="width:200px">Phase 2 — OCR Check</th>
+    <th style="width:220px">Phase 2 — AI Check</th>
+    <th style="width:180px">Cross-Field Deps</th>
+    <th style="width:200px">Future Extensions</th>
+  </tr>
+</thead>
+<tbody>
+
+<!-- ═══ GROUP 1: COMPANY IDENTITY ═══ -->
+<tr class="group-header g1"><td colspan="8">Group 1 — Company Identity</td></tr>
+
+<tr class="g1">
+  <td><div class="field-name">company_name</div></td>
+  <td><div class="field-label">Company Name</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required</li>
+      <li>Min 3 characters</li>
+    </ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Match against MCA company search API</li>
+      <li>Verify company is active (not struck off)</li>
+      <li>Flag if name doesn't end in Pvt Ltd / LLP etc. matching company_type</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">company_type</span>
+    <span class="cross-pill">account_holder_name</span>
+    <span class="cross-pill">contact_email</span>
+  </td>
+  <td>
+    <span class="future-field">trade_name (DBA) — different from legal name</span><br>
+    <span class="future-field">mca_status — Active / Struck Off</span>
+  </td>
+</tr>
+
+<tr class="g1">
+  <td><div class="field-name">company_type</div></td>
+  <td><div class="field-label">Company Type</div></td>
+  <td><span class="field-type">select</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required</li>
+      <li>Must be in: Pvt Ltd, Public Ltd, LLP, Partnership, Sole Prop</li>
+    </ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="cross-pill">pan_number</span> 4th char<br>
+    <span class="cross-pill">din</span> required if Pvt/Pub<br>
+    <span class="cross-pill">cin_number</span> required if Pvt/Pub<br>
+    <span class="cross-pill">dpin</span> required if LLP<br>
+    <span class="cross-pill">llp_number</span> required if LLP<br>
+    <span class="cross-pill">incorporation doc</span> required if Pvt/Pub<br>
+    <span class="cross-pill">llp_agreement doc</span> required if LLP<br>
+    <span class="cross-pill">partnership_deed doc</span> required if Partnership
+  </td>
+  <td><span class="na">—</span></td>
+</tr>
+
+<tr class="g1">
+  <td><div class="field-name">incorporation_date</div></td>
+  <td><div class="field-label">Incorporation Date</div></td>
+  <td><span class="field-type">date</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required</li>
+      <li>Must be in the past</li>
+      <li>Not before 1900</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract date from incorporation cert / CIN certificate</li>
+      <li>Match against this field</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Verify against MCA records API</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">cin_number</span> year must match
+  </td>
+  <td>
+    <span class="future-field">registration_number — MCA internal ref</span>
+  </td>
+</tr>
+
+<tr class="g1">
+  <td><div class="field-name">registered_address</div></td>
+  <td><div class="field-label">Registered Address</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required</li>
+      <li>Min 10 characters</li>
+    </ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Fuzzy match against address in GST certificate</li>
+      <li>Match against MCA registered address</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">state</span>
+    <span class="cross-pill">city</span>
+  </td>
+  <td>
+    <span class="future-field">pincode — validate format + state match</span>
+  </td>
+</tr>
+
+<tr class="g1">
+  <td><div class="field-name">city</div></td>
+  <td><div class="field-label">City</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Required, min 2 chars</li></ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list"><li>Verify city belongs to selected state</li></ul>
+  </td>
+  <td><span class="cross-pill">state</span></td>
+  <td><span class="na">—</span></td>
+</tr>
+
+<tr class="g1">
+  <td><div class="field-name">state</div></td>
+  <td><div class="field-label">State</div></td>
+  <td><span class="field-type">select</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Required</li><li>Must be valid Indian state/UT</li></ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="cross-pill">gst_number</span> chars 1–2 must match state code<br>
+    <span class="cross-pill">msme_number</span> state abbr must match
+  </td>
+  <td><span class="na">—</span></td>
+</tr>
+
+<tr class="g1">
+  <td><div class="field-name">employee_count</div></td>
+  <td><div class="field-label">Employee Count</div></td>
+  <td><span class="field-type">number</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Required, min 1</li></ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Reasonableness vs annual_turnover (1000 employees + &lt;1 Cr is suspicious)</li>
+      <li>Flag if MSME number present but employee count very high</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">msme_number</span> — no hard block but AI flag
+  </td>
+  <td>
+    <span class="future-field">pf_registered — provident fund registration</span>
+    <span class="future-field">esic_registered — ESIC for employees &gt;10</span>
+  </td>
+</tr>
+
+<tr class="g1">
+  <td><div class="field-name">annual_turnover</div></td>
+  <td><div class="field-label">Annual Turnover</div></td>
+  <td><span class="field-type">select</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Required</li><li>Must be: &lt;1 Cr, 1–10 Cr, 10–100 Cr, &gt;100 Cr</li></ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Cross-check with employee count for reasonableness</li>
+      <li>Turnover &gt;100 Cr + 3 employees = suspicious</li>
+    </ul>
+  </td>
+  <td><span class="cross-pill">employee_count</span></td>
+  <td>
+    <span class="future-field">exact_turnover_lakhs — precise figure</span>
+    <span class="future-field">financial_year — which FY the turnover refers to</span>
+  </td>
+</tr>
+
+<tr class="g1">
+  <td><div class="field-name">website</div></td>
+  <td><div class="field-label">Website URL</div></td>
+  <td><span class="field-type">url</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Optional</li><li>Must match https?://... pattern if provided</li></ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Verify site is live (HTTP ping)</li>
+      <li>Domain must match contact_email domain</li>
+      <li>Check if site mentions company name</li>
+    </ul>
+  </td>
+  <td><span class="cross-pill">contact_email</span> domain must match</td>
+  <td><span class="na">—</span></td>
+</tr>
+
+<!-- ═══ GROUP 2: PAN ═══ -->
+<tr class="group-header g2"><td colspan="8">Group 2 — PAN</td></tr>
+
+<tr class="g2">
+  <td><div class="field-name">pan_number</div></td>
+  <td><div class="field-label">PAN Number</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required</li>
+      <li>Regex: [A-Z]{5}[0-9]{4}[A-Z]</li>
+      <li>4th char must match company_type (C/F/P)</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract 10-char PAN from PAN card image</li>
+      <li>Match against pan_number field</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-api">External API</span>
+    <ul class="check-list">
+      <li>NSDL/UTI PAN verification API — is PAN active?</li>
+      <li>Check PAN name matches company_name</li>
+      <li>Flag if PAN is linked to another entity</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">gst_number</span> chars 3–12 must equal PAN<br>
+    <span class="cross-pill">company_type</span> drives 4th char
+  </td>
+  <td>
+    <span class="future-field">pan_name — name as on PAN card</span>
+    <span class="future-field">pan_status — Active / Inoperative</span>
+  </td>
+</tr>
+
+<!-- ═══ GROUP 3: GST ═══ -->
+<tr class="group-header g3"><td colspan="8">Group 3 — GST</td></tr>
+
+<tr class="g3">
+  <td><div class="field-name">gst_registered</div></td>
+  <td><div class="field-label">GST Registered?</div></td>
+  <td><span class="field-type">boolean</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Required (must be true or false, not null)</li></ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="cross-pill">gst_number</span> required if true<br>
+    <span class="cross-pill">gst_cert doc</span> required if true
+  </td>
+  <td>
+    <span class="future-field">gst_exemption_reason — if not registered</span>
+  </td>
+</tr>
+
+<tr class="g3">
+  <td><div class="field-name">gst_number</div></td>
+  <td><div class="field-label">GST Number</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required if gst_registered = true</li>
+      <li>Regex: 15-char format</li>
+      <li>Chars 1–2 = state GST code must match state</li>
+      <li>Chars 3–12 = PAN must match pan_number</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract GSTIN from GST certificate</li>
+      <li>Match against gst_number field</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-api">External API</span>
+    <ul class="check-list">
+      <li>GSTIN lookup API — verify status (Active / Cancelled / Suspended)</li>
+      <li>Check if filing is regular (not defaulter)</li>
+      <li>Verify legal name from GSTIN matches company_name</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">state</span> state code<br>
+    <span class="cross-pill">pan_number</span> embedded<br>
+    <span class="cross-pill">gst_registered</span>
+  </td>
+  <td>
+    <span class="future-field">gst_filing_status — regular / defaulter</span>
+    <span class="future-field">gst_category — Regular / Composition</span>
+  </td>
+</tr>
+
+<!-- ═══ GROUP 4: IDs ═══ -->
+<tr class="group-header g4"><td colspan="8">Group 4 — Director / Company IDs</td></tr>
+
+<tr class="g4">
+  <td><div class="field-name">signatory_name</div></td>
+  <td><div class="field-label">Authorized Signatory</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Required, min 3 chars</li></ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Verify name matches DIN holder name from MCA records</li>
+      <li>Check signatory is a current director (not resigned)</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">din</span> name should match DIN records<br>
+    <span class="cross-pill">dpin</span> for LLP
+  </td>
+  <td>
+    <span class="future-field">signatory_designation — Director / Partner / Proprietor</span>
+  </td>
+</tr>
+
+<tr class="g4">
+  <td><div class="field-name">din</div></td>
+  <td><div class="field-label">Director ID (DIN)</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required for Pvt Ltd / Public Ltd</li>
+      <li>Exactly 8 digits</li>
+    </ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-api">External API</span>
+    <ul class="check-list">
+      <li>MCA DIN lookup — is DIN active?</li>
+      <li>Verify DIN is linked to this company's CIN</li>
+      <li>Name on DIN matches signatory_name</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">company_type</span> only for Pvt/Public Ltd<br>
+    <span class="cross-pill">cin_number</span> DIN must be linked to CIN<br>
+    <span class="cross-pill">signatory_name</span>
+  </td>
+  <td>
+    <span class="future-field">din_status — Approved / Disqualified</span>
+  </td>
+</tr>
+
+<tr class="g4">
+  <td><div class="field-name">dpin</div></td>
+  <td><div class="field-label">Designated Partner ID (DPIN)</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required for LLP</li>
+      <li>Exactly 8 digits</li>
+    </ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-api">External API</span>
+    <ul class="check-list">
+      <li>MCA DPIN lookup — is DPIN active?</li>
+      <li>Verify linked to this LLP</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">company_type</span> LLP only<br>
+    <span class="cross-pill">llp_number</span>
+  </td>
+  <td><span class="na">—</span></td>
+</tr>
+
+<tr class="g4">
+  <td><div class="field-name">cin_number</div></td>
+  <td><div class="field-label">Company ID (CIN)</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required for Pvt Ltd / Public Ltd</li>
+      <li>Regex: 21-char format U/L + NIC + state + year + PTC/PLC + serial</li>
+      <li>Year at index 8–11 must match incorporation year</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract CIN from Certificate of Incorporation</li>
+      <li>Match against cin_number field</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-api">External API</span>
+    <ul class="check-list">
+      <li>MCA CIN lookup — company status active?</li>
+      <li>Verify company name matches</li>
+      <li>Check for any pending charges / liquidation</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">incorporation_date</span> year must match<br>
+    <span class="cross-pill">company_type</span> Pvt/Public Ltd only<br>
+    <span class="cross-pill">state</span> state abbr in CIN
+  </td>
+  <td>
+    <span class="future-field">mca_company_status — Active / Struck Off / Under Liquidation</span>
+  </td>
+</tr>
+
+<tr class="g4">
+  <td><div class="field-name">llp_number</div></td>
+  <td><div class="field-label">LLP ID Number</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required for LLP</li>
+      <li>Regex: AAA-1234 format</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract from LLP Agreement doc</li>
+      <li>Match against llp_number field</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-api">External API</span>
+    <ul class="check-list">
+      <li>MCA LLP lookup — active status?</li>
+    </ul>
+  </td>
+  <td><span class="cross-pill">company_type</span> LLP only</td>
+  <td><span class="na">—</span></td>
+</tr>
+
+<tr class="g4">
+  <td><div class="field-name">msme_number</div></td>
+  <td><div class="field-label">MSME / Udyam No.</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Optional</li>
+      <li>Regex: UDYAM-XX-00-0000000</li>
+      <li>No employee count or turnover restriction (removed)</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract MSME number from Udyam certificate</li>
+      <li>Match against msme_number field</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-api">External API</span>
+    <ul class="check-list">
+      <li>Udyam portal API — verify registration is active</li>
+      <li>Check MSME category (Micro / Small / Medium)</li>
+      <li>Verify PAN linked to this MSME matches pan_number</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">state</span> state abbr in MSME number<br>
+    <span class="cross-pill">msme_cert doc</span> required if provided
+  </td>
+  <td>
+    <span class="future-field">msme_category — Micro / Small / Medium</span>
+    <span class="future-field">udyam_status — Active / Cancelled</span>
+  </td>
+</tr>
+
+<!-- ═══ GROUP 5: BANKING ═══ -->
+<tr class="group-header g5"><td colspan="8">Group 5 — Banking</td></tr>
+
+<tr class="g5">
+  <td><div class="field-name">account_holder_name</div></td>
+  <td><div class="field-label">Account Holder Name</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Required, min 3 chars</li></ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract account name from cancelled cheque</li>
+      <li>Match against this field</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Fuzzy match vs company_name (≥80% similarity expected)</li>
+      <li>Flag if completely unrelated names</li>
+      <li>Allow common abbreviations (Pvt Ltd → P Ltd etc.)</li>
+    </ul>
+  </td>
+  <td><span class="cross-pill">company_name</span> fuzzy match</td>
+  <td>
+    <span class="future-field">penny_drop — ₹1 credit to verify account is live</span>
+  </td>
+</tr>
+
+<tr class="g5">
+  <td><div class="field-name">bank_name</div></td>
+  <td><div class="field-label">Bank Name</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Required, min 3 chars</li></ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Verify IFSC prefix matches bank_name (HDFC0... → HDFC Bank)</li>
+      <li>Check bank is RBI-licensed</li>
+    </ul>
+  </td>
+  <td><span class="cross-pill">ifsc_code</span> prefix must match bank</td>
+  <td>
+    <span class="future-field">bank_branch — branch name from IFSC API</span>
+  </td>
+</tr>
+
+<tr class="g5">
+  <td><div class="field-name">account_number</div></td>
+  <td><div class="field-label">Account Number</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required</li>
+      <li>9–18 digits, numeric only</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract account number from cancelled cheque</li>
+      <li>Match against this field</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-api">External API</span>
+    <ul class="check-list">
+      <li>Penny drop / bank account verification API</li>
+      <li>Confirms account is active and name matches</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">ifsc_code</span> together identify the account<br>
+    <span class="cross-pill">account_holder_name</span>
+  </td>
+  <td><span class="na">—</span></td>
+</tr>
+
+<tr class="g5">
+  <td><div class="field-name">ifsc_code</div></td>
+  <td><div class="field-label">IFSC Code</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required</li>
+      <li>Regex: AAAA0XXXXXX (5th char always 0)</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract IFSC from cancelled cheque (usually large print)</li>
+      <li>Match against ifsc_code field</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-api">External API</span>
+    <ul class="check-list">
+      <li>RBI IFSC API — verify branch exists</li>
+      <li>Get bank name from IFSC, compare with bank_name field</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">bank_name</span> prefix must match
+  </td>
+  <td>
+    <span class="future-field">branch_city — from IFSC lookup</span>
+    <span class="future-field">micr_code — for ECS/NEFT routing</span>
+  </td>
+</tr>
+
+<tr class="g5">
+  <td><div class="field-name">account_type</div></td>
+  <td><div class="field-label">Account Type</div></td>
+  <td><span class="field-type">select</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required</li>
+      <li>Must be: Current or Savings</li>
+    </ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Savings account for a Pvt Ltd company is suspicious — flag it</li>
+      <li>Businesses typically use Current accounts</li>
+    </ul>
+  </td>
+  <td><span class="cross-pill">company_type</span></td>
+  <td><span class="na">—</span></td>
+</tr>
+
+<!-- ═══ GROUP 6: ISO ═══ -->
+<tr class="group-header g6"><td colspan="8">Group 6 — ISO 27001 Certification</td></tr>
+
+<tr class="g6">
+  <td><div class="field-name">iso_certified</div></td>
+  <td><div class="field-label">ISO 27001 Certified?</div></td>
+  <td><span class="field-type">boolean</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Required (true/false, not null)</li></ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="cross-pill">iso_cert_number</span> required if true<br>
+    <span class="cross-pill">iso_expiry_date</span> required if true<br>
+    <span class="cross-pill">iso_cert doc</span> required if true
+  </td>
+  <td><span class="na">—</span></td>
+</tr>
+
+<tr class="g6">
+  <td><div class="field-name">iso_cert_number</div></td>
+  <td><div class="field-label">ISO Certificate Number</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required if iso_certified = true</li>
+      <li>Min 3 chars</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract cert number from ISO certificate doc</li>
+      <li>Match against this field</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Verify cert number format is consistent with issuing body (BSI / Bureau Veritas / TÜV)</li>
+      <li>Check if company name on cert matches company_name</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">iso_certified</span><br>
+    <span class="cross-pill">iso_expiry_date</span>
+  </td>
+  <td>
+    <span class="future-field">iso_certifying_body — BSI / Bureau Veritas / TÜV etc.</span>
+    <span class="future-field">iso_scope — scope of certification</span>
+  </td>
+</tr>
+
+<tr class="g6">
+  <td><div class="field-name">iso_expiry_date</div></td>
+  <td><div class="field-label">ISO Expiry Date</div></td>
+  <td><span class="field-type">date</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required if iso_certified = true</li>
+      <li>Must be a future date</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract expiry date from ISO certificate</li>
+      <li>Match against this field</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Flag if expiry is within 3 months (renewal needed soon)</li>
+    </ul>
+  </td>
+  <td><span class="cross-pill">iso_certified</span></td>
+  <td>
+    <span class="future-field">iso_issue_date — when cert was issued</span>
+  </td>
+</tr>
+
+<tr class="g6">
+  <td><div class="field-name">soc2_audited</div></td>
+  <td><div class="field-label">SOC 2 Type II Audited?</div></td>
+  <td><span class="field-type">boolean</span></td>
+  <td>
+    <span class="badge b-none">No Check</span>
+    <ul class="check-list"><li>Stored only, not validated</li></ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>If true, request SOC2 report document</li>
+      <li>Factor into risk score (SOC2 = lower risk)</li>
+    </ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="future-field">soc2_report doc — upload audit report</span>
+    <span class="future-field">soc2_audit_period — date range covered</span>
+    <span class="future-field">soc2_auditor — firm that conducted audit</span>
+  </td>
+</tr>
+
+<!-- ═══ GROUP 7: COMPLIANCE ═══ -->
+<tr class="group-header g7"><td colspan="8">Group 7 — Data & Compliance</td></tr>
+
+<tr class="g7">
+  <td><div class="field-name">service_nature</div></td>
+  <td><div class="field-label">Nature of IT Service</div></td>
+  <td><span class="field-type">select</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required</li>
+      <li>Must be in allowed set (8 options)</li>
+    </ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Auto-suggest based on company_name (e.g. "Security" in name → Cybersecurity Tool)</li>
+      <li>Consistency with website content</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">processes_data</span> Core Banking Software → always processes data
+  </td>
+  <td>
+    <span class="future-field">service_description — free text, for AI risk categorisation</span>
+    <span class="future-field">nic_code — industry code for RBI classification</span>
+  </td>
+</tr>
+
+<tr class="g7">
+  <td><div class="field-name">processes_data</div></td>
+  <td><div class="field-label">Processes Bank/Customer Data?</div></td>
+  <td><span class="field-type">boolean</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required (true/false not null)</li>
+      <li>If true → cyber_insurance mandatory</li>
+    </ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>If service_nature = Core Banking Software → auto-flag if false</li>
+      <li>Use in risk score calculation</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">cyber_insurance</span> mandatory if true<br>
+    <span class="cross-pill">dpa doc</span> required if true<br>
+    <span class="cross-pill">service_nature</span>
+  </td>
+  <td>
+    <span class="future-field">data_types_processed — PII / financial / both</span>
+    <span class="future-field">data_volume — records per day/month</span>
+  </td>
+</tr>
+
+<tr class="g7">
+  <td><div class="field-name">data_in_india</div></td>
+  <td><div class="field-label">Data Stored Within India?</div></td>
+  <td><span class="field-type">boolean</span></td>
+  <td>
+    <span class="badge b-warn">Warning Only</span>
+    <ul class="check-list">
+      <li>Required (true/false not null)</li>
+      <li>If false → NOT a hard block. RBI compliance flag only. Still submits.</li>
+    </ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>If cloud_provider = AWS/Azure/GCP → ask which region</li>
+      <li>If On-Premise → data_in_india should probably be true</li>
+      <li>Add to risk score if false</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">cloud_provider</span> — On-Premise implies India
+  </td>
+  <td>
+    <span class="future-field">data_region — specific cloud region (ap-south-1 etc.)</span>
+    <span class="future-field">rbi_compliant — explicit RBI IT framework compliance flag</span>
+  </td>
+</tr>
+
+<tr class="g7">
+  <td><div class="field-name">cloud_provider</div></td>
+  <td><div class="field-label">Cloud Provider</div></td>
+  <td><span class="field-type">select</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required</li>
+      <li>Must be in: AWS, Azure, GCP, Private Cloud, On-Premise, Hybrid, Not Applicable</li>
+    </ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>If On-Premise and data_in_india = false → flag inconsistency</li>
+      <li>Factor into risk profile (cloud = higher scrutiny for RBI)</li>
+    </ul>
+  </td>
+  <td><span class="cross-pill">data_in_india</span></td>
+  <td>
+    <span class="future-field">cloud_region — Mumbai / Singapore / US-East etc.</span>
+    <span class="future-field">cloud_shared_responsibility — SOC / CSA STAR cert</span>
+  </td>
+</tr>
+
+<tr class="g7">
+  <td><div class="field-name">cyber_insurance</div></td>
+  <td><div class="field-label">Cyber Insurance Policy?</div></td>
+  <td><span class="field-type">boolean</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required (true/false not null)</li>
+      <li>Mandatory if processes_data = true (hard block)</li>
+    </ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="cross-pill">processes_data</span> mandatory if true<br>
+    <span class="cross-pill">cyber_coverage_crores</span> required if true
+  </td>
+  <td>
+    <span class="future-field">cyber_insurer — insurance company name</span>
+    <span class="future-field">cyber_policy_number — policy reference</span>
+    <span class="future-field">cyber_policy_expiry — must be future date</span>
+    <span class="future-field">cyber_policy doc — upload policy document</span>
+  </td>
+</tr>
+
+<tr class="g7">
+  <td><div class="field-name">cyber_coverage_crores</div></td>
+  <td><div class="field-label">Cyber Coverage (₹ Cr)</div></td>
+  <td><span class="field-type">number</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required if cyber_insurance = true</li>
+      <li>Must be &gt; 0</li>
+    </ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Flag if coverage is very low for company size (e.g. ₹0.1 Cr for &gt;100 Cr turnover)</li>
+      <li>Minimum coverage recommendation based on turnover bracket</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">cyber_insurance</span><br>
+    <span class="cross-pill">annual_turnover</span> coverage should be proportionate
+  </td>
+  <td><span class="na">—</span></td>
+</tr>
+
+<!-- ═══ GROUP 8: CONTACT ═══ -->
+<tr class="group-header g8"><td colspan="8">Group 8 — Contact</td></tr>
+
+<tr class="g8">
+  <td><div class="field-name">contact_name</div></td>
+  <td><div class="field-label">Contact Person Name</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Required, min 3 chars</li></ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td><span class="na">—</span></td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="future-field">contact_designation — role of this person</span>
+    <span class="future-field">alternate_contact_name + phone</span>
+  </td>
+</tr>
+
+<tr class="g8">
+  <td><div class="field-name">contact_email</div></td>
+  <td><div class="field-label">Contact Email</div></td>
+  <td><span class="field-type">email</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required</li>
+      <li>Must contain @</li>
+      <li>Free domains blocked: gmail, yahoo, hotmail, outlook, rediffmail</li>
+    </ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Email domain must match website domain</li>
+      <li>MX record check — is domain deliverable?</li>
+      <li>Check email is not a role address (info@, admin@) if high-risk vendor</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">website</span> domain must match
+  </td>
+  <td>
+    <span class="future-field">email_verified — OTP verification (Phase 3)</span>
+  </td>
+</tr>
+
+<tr class="g8">
+  <td><div class="field-name">contact_phone</div></td>
+  <td><div class="field-label">Contact Phone</div></td>
+  <td><span class="field-type">text</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Required</li>
+      <li>Must include country code: +[1-3 digits][7-12 digits]</li>
+    </ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Verify number format matches claimed country code</li>
+      <li>+91 → must be 10 digits after</li>
+    </ul>
+  </td>
+  <td><span class="na">—</span></td>
+  <td>
+    <span class="future-field">phone_verified — OTP SMS verification</span>
+    <span class="future-field">alternate_phone</span>
+  </td>
+</tr>
+
+<!-- ═══ GROUP 9: DOCUMENTS ═══ -->
+<tr class="group-header g9"><td colspan="8">Group 9 — Documents (Uploads)</td></tr>
+
+<tr class="g9">
+  <td><div class="field-name">pan_card</div></td>
+  <td><div class="field-label">PAN Card</div></td>
+  <td><span class="field-type">file</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Always required</li>
+      <li>Format: PDF/JPG/PNG</li>
+      <li>Size: 10KB – 10MB</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract PAN number from image</li>
+      <li>Extract name on PAN card</li>
+      <li>Match PAN against pan_number field</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Name on PAN card must fuzzy-match company_name</li>
+      <li>Detect if image is a photocopy/scan vs original</li>
+      <li>Tamper detection (font inconsistency, background noise)</li>
+    </ul>
+  </td>
+  <td><span class="cross-pill">pan_number</span> must match OCR extract</td>
+  <td><span class="na">—</span></td>
+</tr>
+
+<tr class="g9">
+  <td><div class="field-name">cancelled_cheque</div></td>
+  <td><div class="field-label">Cancelled Cheque</div></td>
+  <td><span class="field-type">file</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list">
+      <li>Always required</li>
+      <li>Format: PDF/JPG/PNG, 10KB–10MB</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract IFSC code from cheque</li>
+      <li>Extract account number from cheque</li>
+      <li>Extract account holder name</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>IFSC from cheque must match ifsc_code field</li>
+      <li>Account number must match account_number field</li>
+      <li>Account name must fuzzy-match account_holder_name</li>
+      <li>Verify "CANCELLED" watermark present</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">ifsc_code</span><br>
+    <span class="cross-pill">account_number</span><br>
+    <span class="cross-pill">account_holder_name</span>
+  </td>
+  <td><span class="na">—</span></td>
+</tr>
+
+<tr class="g9">
+  <td><div class="field-name">gst_cert</div></td>
+  <td><div class="field-label">GST Certificate</div></td>
+  <td><span class="field-type">file</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Required if gst_registered = true</li></ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract GSTIN from certificate</li>
+      <li>Extract legal name</li>
+      <li>Extract registration date</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>GSTIN on cert must match gst_number field</li>
+      <li>Name on cert fuzzy-match company_name</li>
+      <li>State on cert must match state field</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">gst_number</span><br>
+    <span class="cross-pill">company_name</span><br>
+    <span class="cross-pill">state</span>
+  </td>
+  <td><span class="na">—</span></td>
+</tr>
+
+<tr class="g9">
+  <td><div class="field-name">incorporation</div></td>
+  <td><div class="field-label">Certificate of Incorporation</div></td>
+  <td><span class="field-type">file</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Required for Pvt Ltd / Public Ltd</li></ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract CIN number</li>
+      <li>Extract company name</li>
+      <li>Extract date of incorporation</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>CIN on cert must match cin_number field</li>
+      <li>Date on cert must match incorporation_date</li>
+      <li>MCA seal / format validation</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">cin_number</span><br>
+    <span class="cross-pill">incorporation_date</span>
+  </td>
+  <td><span class="na">—</span></td>
+</tr>
+
+<tr class="g9">
+  <td><div class="field-name">llp_agreement</div></td>
+  <td><div class="field-label">LLP Agreement</div></td>
+  <td><span class="field-type">file</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Required for LLP</li></ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract LLP Identification Number</li>
+      <li>Extract partner names</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>LLP number must match llp_number field</li>
+      <li>Signatory name must appear as partner</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">llp_number</span><br>
+    <span class="cross-pill">signatory_name</span>
+  </td>
+  <td><span class="na">—</span></td>
+</tr>
+
+<tr class="g9">
+  <td><div class="field-name">partnership_deed</div></td>
+  <td><div class="field-label">Partnership Deed</div></td>
+  <td><span class="field-type">file</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Required for Partnership Firm</li></ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract firm name</li>
+      <li>Extract partner names</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Firm name fuzzy-match company_name</li>
+      <li>Signatory name must appear as partner</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">company_name</span><br>
+    <span class="cross-pill">signatory_name</span>
+  </td>
+  <td><span class="na">—</span></td>
+</tr>
+
+<tr class="g9">
+  <td><div class="field-name">iso_cert</div></td>
+  <td><div class="field-label">ISO 27001 Certificate</div></td>
+  <td><span class="field-type">file</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Required if iso_certified = true</li></ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract certificate number</li>
+      <li>Extract expiry date</li>
+      <li>Extract company name</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Cert number must match iso_cert_number</li>
+      <li>Expiry date must match iso_expiry_date</li>
+      <li>Company name on cert fuzzy-match company_name</li>
+      <li>Verify "ISO/IEC 27001" text present</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">iso_cert_number</span><br>
+    <span class="cross-pill">iso_expiry_date</span><br>
+    <span class="cross-pill">company_name</span>
+  </td>
+  <td><span class="na">—</span></td>
+</tr>
+
+<tr class="g9">
+  <td><div class="field-name">dpa</div></td>
+  <td><div class="field-label">Data Processing Agreement</div></td>
+  <td><span class="field-type">file</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Required if processes_data = true</li></ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list"><li>Verify document contains "Data Processing Agreement" text</li></ul>
+  </td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>Company name on DPA must match company_name</li>
+      <li>Check key DPA clauses present (data retention, breach notification, DPDP Act)</li>
+      <li>Check if DPA is signed and dated</li>
+    </ul>
+  </td>
+  <td><span class="cross-pill">processes_data</span></td>
+  <td>
+    <span class="future-field">dpa_expiry — when DPA needs renewal</span>
+    <span class="future-field">dpdp_compliant — India DPDP Act 2023 compliance flag</span>
+  </td>
+</tr>
+
+<tr class="g9">
+  <td><div class="field-name">msme_cert</div></td>
+  <td><div class="field-label">MSME / Udyam Certificate</div></td>
+  <td><span class="field-type">file</span></td>
+  <td>
+    <span class="badge b-done">Phase 1 Done</span>
+    <ul class="check-list"><li>Required if msme_number provided</li></ul>
+  </td>
+  <td>
+    <span class="badge b-ocr">OCR Extract</span>
+    <ul class="check-list">
+      <li>Extract Udyam registration number</li>
+      <li>Extract enterprise name</li>
+      <li>Extract MSME category</li>
+    </ul>
+  </td>
+  <td>
+    <span class="badge b-ai">AI Check</span>
+    <ul class="check-list">
+      <li>MSME number on cert must match msme_number field</li>
+      <li>Enterprise name fuzzy-match company_name</li>
+    </ul>
+  </td>
+  <td>
+    <span class="cross-pill">msme_number</span><br>
+    <span class="cross-pill">company_name</span>
+  </td>
+  <td><span class="na">—</span></td>
+</tr>
+
+</tbody>
+</table>
+</div>
+
+<script>
+function filterGroup(group) {
+  const rows = document.querySelectorAll('tbody tr');
+  rows.forEach(row => {
+    if (group === 'all') {
+      row.classList.remove('hidden');
+    } else if (row.classList.contains('group-header')) {
+      row.classList.toggle('hidden', !row.classList.contains(group));
+    } else {
+      row.classList.toggle('hidden', !row.classList.contains(group));
+    }
+  });
+  document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
+  event.target.classList.add('active');
+}
+</script>
+
+</body>
+</html>

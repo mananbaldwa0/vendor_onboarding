@@ -1,0 +1,21 @@
+{
+  "test_name": "test_05_fix_free_email",
+  "email": "test5@gmail.com",
+  "expected_round_1": "draft",
+  "expected_round_2": "submitted",
+  "notes": "Round 1: contact_email uses gmail.com. Round 2: corrected to company domain.",
+  "documents": [
+    {
+      "doc_type": "pan_card",
+      "file_path": "/Users/mananbaldwa/Documents/Claude/Projects/zamp/vendor_onboarding/vendor_onboarding_data_generator/final_tests/test_05_fix_free_email/round_1/docs/vendor_8a4433cb/pan_card.jpg"
+    },
+    {
+      "doc_type": "cancelled_cheque",
+      "file_path": "/Users/mananbaldwa/Documents/Claude/Projects/zamp/vendor_onboarding/vendor_onboarding_data_generator/final_tests/test_05_fix_free_email/round_1/docs/vendor_8a4433cb/cancelled_cheque.jpg"
+    },
+    {
+      "doc_type": "gst_cert",
+      "file_path": "/Users/mananbaldwa/Documents/Claude/Projects/zamp/vendor_onboarding/vendor_onboarding_data_generator/final_tests/test_05_fix_free_email/round_1/docs/vendor_8a4433cb/gst_cert.pdf"
+    }
+  ]
+}

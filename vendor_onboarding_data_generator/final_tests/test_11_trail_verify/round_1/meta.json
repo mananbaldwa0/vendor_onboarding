@@ -1,0 +1,17 @@
+{
+  "test_name": "test_11_trail_verify",
+  "email": "test11@gmail.com",
+  "expected_round_1": "draft",
+  "expected_round_2": null,
+  "notes": "Round 1: PAN 4th char C (needs P for Sole Prop) + msme_cert not uploaded. Two errors.",
+  "documents": [
+    {
+      "doc_type": "pan_card",
+      "file_path": "/Users/mananbaldwa/Documents/Claude/Projects/zamp/vendor_onboarding/vendor_onboarding_data_generator/final_tests/test_11_trail_verify/docs/vendor_2669c53f/pan_card.jpg"
+    },
+    {
+      "doc_type": "cancelled_cheque",
+      "file_path": "/Users/mananbaldwa/Documents/Claude/Projects/zamp/vendor_onboarding/vendor_onboarding_data_generator/final_tests/test_11_trail_verify/docs/vendor_2669c53f/cancelled_cheque.jpg"
+    }
+  ]
+}

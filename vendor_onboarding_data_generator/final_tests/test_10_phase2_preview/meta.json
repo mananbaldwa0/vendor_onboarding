@@ -1,0 +1,33 @@
+{
+  "test_name": "test_10_phase2_preview",
+  "email": "test10@gmail.com",
+  "expected_round_1": "submitted",
+  "expected_round_2": null,
+  "notes": "MY CHOICE: account_holder_name='Random Traders Private Limited' has zero relation to actual company_name. Phase 1 passes (no fuzzy match rule). Phase 2 AI will flag this as account name mismatch \u2014 potential fraud signal.",
+  "documents": [
+    {
+      "doc_type": "pan_card",
+      "file_path": "/Users/mananbaldwa/Documents/Claude/Projects/zamp/vendor_onboarding/vendor_onboarding_data_generator/final_tests/test_10_phase2_preview/docs/vendor_ac1f36a3/pan_card.jpg"
+    },
+    {
+      "doc_type": "cancelled_cheque",
+      "file_path": "/Users/mananbaldwa/Documents/Claude/Projects/zamp/vendor_onboarding/vendor_onboarding_data_generator/final_tests/test_10_phase2_preview/docs/vendor_ac1f36a3/cancelled_cheque.jpg"
+    },
+    {
+      "doc_type": "gst_cert",
+      "file_path": "/Users/mananbaldwa/Documents/Claude/Projects/zamp/vendor_onboarding/vendor_onboarding_data_generator/final_tests/test_10_phase2_preview/docs/vendor_ac1f36a3/gst_cert.pdf"
+    },
+    {
+      "doc_type": "incorporation",
+      "file_path": "/Users/mananbaldwa/Documents/Claude/Projects/zamp/vendor_onboarding/vendor_onboarding_data_generator/final_tests/test_10_phase2_preview/docs/vendor_ac1f36a3/incorporation.pdf"
+    },
+    {
+      "doc_type": "iso_cert",
+      "file_path": "/Users/mananbaldwa/Documents/Claude/Projects/zamp/vendor_onboarding/vendor_onboarding_data_generator/final_tests/test_10_phase2_preview/docs/vendor_ac1f36a3/iso_cert.pdf"
+    },
+    {
+      "doc_type": "dpa",
+      "file_path": "/Users/mananbaldwa/Documents/Claude/Projects/zamp/vendor_onboarding/vendor_onboarding_data_generator/final_tests/test_10_phase2_preview/docs/vendor_ac1f36a3/dpa.pdf"
+    }
+  ]
+}

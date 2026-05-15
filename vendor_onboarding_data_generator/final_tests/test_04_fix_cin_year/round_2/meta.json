@@ -1,0 +1,29 @@
+{
+  "test_name": "test_04_fix_cin_year",
+  "email": "test4@gmail.com",
+  "expected_round_1": "submitted",
+  "expected_round_2": null,
+  "notes": "Round 2: CIN year corrected. Should submit successfully.",
+  "documents": [
+    {
+      "doc_type": "pan_card",
+      "file_path": "/Users/mananbaldwa/Documents/Claude/Projects/zamp/vendor_onboarding/vendor_onboarding_data_generator/final_tests/test_04_fix_cin_year/round_2/docs/vendor_1d398b0b/pan_card.jpg"
+    },
+    {
+      "doc_type": "cancelled_cheque",
+      "file_path": "/Users/mananbaldwa/Documents/Claude/Projects/zamp/vendor_onboarding/vendor_onboarding_data_generator/final_tests/test_04_fix_cin_year/round_2/docs/vendor_1d398b0b/cancelled_cheque.jpg"
+    },
+    {
+      "doc_type": "gst_cert",
+      "file_path": "/Users/mananbaldwa/Documents/Claude/Projects/zamp/vendor_onboarding/vendor_onboarding_data_generator/final_tests/test_04_fix_cin_year/round_2/docs/vendor_1d398b0b/gst_cert.pdf"
+    },
+    {
+      "doc_type": "incorporation",
+      "file_path": "/Users/mananbaldwa/Documents/Claude/Projects/zamp/vendor_onboarding/vendor_onboarding_data_generator/final_tests/test_04_fix_cin_year/round_2/docs/vendor_1d398b0b/incorporation.pdf"
+    },
+    {
+      "doc_type": "dpa",
+      "file_path": "/Users/mananbaldwa/Documents/Claude/Projects/zamp/vendor_onboarding/vendor_onboarding_data_generator/final_tests/test_04_fix_cin_year/round_2/docs/vendor_1d398b0b/dpa.pdf"
+    }
+  ]
+}

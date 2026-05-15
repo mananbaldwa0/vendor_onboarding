@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Virtual environments
+zamp_venv/
+venv/
+.venv/
+
+# Node
+vendor_onboarding_frontend/node_modules/
+
+# Generated test documents (binary blobs, reproducible via generate_tests.py)
+vendor_onboarding_data_generator/final_tests/test_*/docs/
+vendor_onboarding_data_generator/final_tests/test_*/round_*/docs/
+
+# Generated output
+vendor_onboarding_data_generator/output/
+
+# Secrets
+.env
+*.env
+
+# OS
+.DS_Store
