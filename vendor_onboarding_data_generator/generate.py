@@ -1,264 +1,223 @@
 #!/usr/bin/env python3
-import sys
-import os
+"""
+Generates 3 manual test cases for end-to-end testing.
+
+Run from vendor_onboarding_data_generator/:
+  python generate.py
+
+Output: output/case_01_clean_pass/
+        output/case_02_ai_mismatch/
+        output/case_03_high_risk/
+
+Each case folder has:
+  payload.json  — POST this body to /api/application/submit
+  meta.json     — what to expect from each pipeline layer
+  docs/vendor_*/  — upload these files via /api/documents/upload
+"""
 import json
-import importlib
+import sys
+import uuid
+from copy import deepcopy
+from datetime import date, timedelta
 from pathlib import Path
 
-# Ensure package root is on sys.path
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
-try:
-    import typer
-    from rich.console import Console
-    from rich.table import Table
-    RICH_TYPER = True
-except ImportError:
-    RICH_TYPER = False
+from generators.company import generate_company
+from generators.legal import generate_legal
+from generators.banking import generate_banking
+from generators.compliance import generate_compliance, generate_iso_cert_number
+from generators.contact import generate_contact
+from generators.documents import generate_all_documents
+from scenarios.base import assemble_vendor
 
-SCENARIO_MAP = {
-    # Valid
-    "valid_pvt_ltd": "scenarios.valid_pvt_ltd",
-    "valid_llp": "scenarios.valid_llp",
-    "valid_sole_prop": "scenarios.valid_sole_prop",
-    "valid_partnership": "scenarios.valid_partnership",
-    "valid_no_gst": "scenarios.valid_no_gst",
-    "valid_with_msme": "scenarios.valid_with_msme",
-    # Invalid
-    "invalid_pan_mismatch": "scenarios.invalid_pan_mismatch",
-    "invalid_gst_state": "scenarios.invalid_gst_state",
-    "invalid_cin_year": "scenarios.invalid_cin_year",
-    "invalid_free_email": "scenarios.invalid_free_email",
-    "invalid_data_offshore": "scenarios.invalid_data_offshore",
-    "invalid_missing_dpa": "scenarios.invalid_missing_dpa",
-    "invalid_expired_iso": "scenarios.invalid_expired_iso",
-    "invalid_no_cyber_insurance": "scenarios.invalid_no_cyber_insurance",
-    "invalid_account_name": "scenarios.invalid_account_name",
-    "invalid_short_account": "scenarios.invalid_short_account",
-    "invalid_bad_ifsc": "scenarios.invalid_bad_ifsc",
-    "invalid_phone_no_code": "scenarios.invalid_phone_no_code",
-    "invalid_pan_type_mismatch": "scenarios.invalid_pan_type_mismatch",
-    "invalid_gst_registered_no_number": "scenarios.invalid_gst_registered_no_number",
-    "invalid_dpin_missing_llp": "scenarios.invalid_dpin_missing_llp",
-    "invalid_signatory_short": "scenarios.invalid_signatory_short",
-    # Edge
-    "edge_msme_limits": "scenarios.edge_msme_limits",
-    "edge_iso_expires_today": "scenarios.edge_iso_expires_today",
-    "edge_max_employees": "scenarios.edge_max_employees",
-}
-
-VALID_SCENARIOS = [k for k in SCENARIO_MAP if k.startswith("valid_")]
-INVALID_SCENARIOS = [k for k in SCENARIO_MAP if k.startswith("invalid_")]
-EDGE_SCENARIOS = [k for k in SCENARIO_MAP if k.startswith("edge_")]
+OUT = ROOT / "output"
 
 
-def _run_scenario(name: str, output_base: str = "output/docs") -> dict:
-    module_path = SCENARIO_MAP[name]
-    mod = importlib.import_module(module_path)
-    return mod.generate(output_base=output_base)
+def save_case(case_dir: Path, form_data: dict, docs: list, meta: dict):
+    case_dir.mkdir(parents=True, exist_ok=True)
+    with open(case_dir / "payload.json", "w") as f:
+        json.dump(form_data, f, indent=2, default=str)
+    with open(case_dir / "meta.json", "w") as f:
+        json.dump(meta, f, indent=2, default=str)
+    print(f"  [{meta['case']}] {len(docs)} docs → {case_dir}")
 
 
-def _save_json(payload: dict, output_dir: str):
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-    scenario = payload.get("scenario", "unknown")
-    vendor_id = payload.get("vendor_id", "vendor")
-    fname = f"{scenario}_{vendor_id}.json"
-    fpath = os.path.join(output_dir, fname)
-    with open(fpath, "w") as f:
-        json.dump(payload, f, indent=2, default=str)
-    return fpath
+# ── Case 1: Clean valid vendor ────────────────────────────────────────────────
+# Private Limited. All docs embed values that match form exactly.
+# Good compliance: data in India, ISO valid, SOC2 audited.
+# Expected: Layer 1 → submitted. AI → no flags. decision = approved.
+
+def case_01_clean_pass():
+    company = generate_company(company_type="Private Limited")
+    legal = generate_legal(company)
+    banking = generate_banking(company)
+    compliance = generate_compliance(force_processes_data=True, force_data_offshore=False)
+    compliance["data_in_india"] = True
+    compliance["soc2_audited"] = True
+    compliance["iso_certified"] = True
+    compliance["iso_cert_number"] = generate_iso_cert_number()
+    compliance["iso_expiry_date"] = (date.today() + timedelta(days=365)).isoformat()
+    contact = generate_contact(company)
+
+    vendor_id = f"vendor_{uuid.uuid4().hex[:8]}"
+    vendor = assemble_vendor(
+        company, legal, banking, compliance, contact,
+        output_base=str(OUT / "case_01_clean_pass" / "docs"),
+        vendor_id=vendor_id,
+    )
+
+    save_case(
+        OUT / "case_01_clean_pass",
+        vendor["form_data"],
+        vendor["documents"],
+        {
+            "case": "case_01_clean_pass",
+            "description": (
+                "Private Limited. All docs match form exactly. "
+                "Data in India. ISO valid 1 year. SOC2 audited."
+            ),
+            "expected_layer1": "submitted",
+            "expected_ai_decision": "approved",
+            "expected_user_flags": [],
+            "expected_risk_factors": [],
+        },
+    )
 
 
-if RICH_TYPER:
-    app = typer.Typer(help="Vendor Onboarding Data Generator")
-    console = Console()
+# ── Case 2: AI mismatch flags ─────────────────────────────────────────────────
+# Form has correct values. Docs have wrong PAN + unrelated account holder name.
+# Layer 1 passes (format valid). AI catches both mismatches via OCR cross-check.
+# Expected: Layer 1 → submitted. AI → pan_number + account_holder_name flags.
+# decision = waiting_for_response.
 
-    @app.command()
-    def single(
-        scenario: str = typer.Option("valid_pvt_ltd", help="Scenario name"),
-        output: str = typer.Option("output/json", help="JSON output directory"),
-        docs: str = typer.Option("output/docs", help="Documents output directory"),
-        print_json: bool = typer.Option(False, "--print", help="Print JSON to stdout"),
-    ):
-        """Generate one vendor payload for a given scenario."""
-        if scenario not in SCENARIO_MAP:
-            console.print(f"[red]Unknown scenario: {scenario}[/red]")
-            console.print(f"Run [bold]list-scenarios[/bold] to see available options.")
-            raise typer.Exit(1)
-        payload = _run_scenario(scenario, output_base=docs)
-        fpath = _save_json(payload, output)
-        console.print(f"[green]✓[/green] Generated [bold]{scenario}[/bold] → {fpath}")
-        if payload.get("documents"):
-            console.print(f"  Documents: {len(payload['documents'])} files in {docs}/")
-        if print_json:
-            console.print_json(json.dumps(payload, default=str))
+def case_02_ai_mismatch():
+    company = generate_company(company_type="Private Limited")
+    legal = generate_legal(company)
+    banking = generate_banking(company)
+    compliance = generate_compliance(force_processes_data=False, force_data_offshore=False)
+    compliance["data_in_india"] = True
+    contact = generate_contact(company)
 
-    @app.command()
-    def bulk(
-        count: int = typer.Option(10, help="Number of vendors to generate"),
-        scenario: str = typer.Option("valid_pvt_ltd", help="Scenario to repeat"),
-        output: str = typer.Option("output/json", help="JSON output directory"),
-        docs: str = typer.Option("output/docs", help="Documents output directory"),
-    ):
-        """Generate multiple vendor payloads (bulk/load testing)."""
-        if scenario not in SCENARIO_MAP:
-            console.print(f"[red]Unknown scenario: {scenario}[/red]")
-            raise typer.Exit(1)
-        console.print(f"Generating {count} × [bold]{scenario}[/bold]...")
-        for i in range(count):
-            payload = _run_scenario(scenario, output_base=docs)
-            fpath = _save_json(payload, output)
-            console.print(f"  [{i+1}/{count}] {payload['vendor_id']} → {fpath}")
-        console.print(f"[green]Done.[/green] {count} vendors saved to {output}/")
+    vendor_id = f"vendor_{uuid.uuid4().hex[:8]}"
+    case_dir = OUT / "case_02_ai_mismatch"
 
-    @app.command(name="all-invalid")
-    def all_invalid(
-        output: str = typer.Option("output/json", help="JSON output directory"),
-        docs: str = typer.Option("output/docs", help="Documents output directory"),
-    ):
-        """Generate all invalid scenarios."""
-        for name in INVALID_SCENARIOS:
-            payload = _run_scenario(name, output_base=docs)
-            fpath = _save_json(payload, output)
-            errors = payload.get("expected_result", {}).get("errors", [])
-            console.print(f"[yellow]✗[/yellow] [bold]{name}[/bold] → {fpath}")
-            for e in errors:
-                console.print(f"    expected: {e}")
+    # Form data uses correct values
+    form_data = {}
+    for d in (company, legal, banking, compliance, contact):
+        for k, v in d.items():
+            if not k.startswith("_"):
+                form_data[k] = v
 
-    @app.command(name="all-edge")
-    def all_edge(
-        output: str = typer.Option("output/json", help="JSON output directory"),
-        docs: str = typer.Option("output/docs", help="Documents output directory"),
-    ):
-        """Generate all edge case scenarios."""
-        for name in EDGE_SCENARIOS:
-            payload = _run_scenario(name, output_base=docs)
-            fpath = _save_json(payload, output)
-            console.print(f"[cyan]~[/cyan] [bold]{name}[/bold] → {fpath}")
+    # Docs embed WRONG values:
+    # - PAN card: last letter flipped (format still valid, value differs)
+    # - Cancelled cheque: unrelated personal name as account holder
+    corrupted_legal = deepcopy(legal)
+    pan = legal["pan_number"]
+    corrupted_legal["pan_number"] = pan[:9] + ("Z" if pan[9] != "Z" else "A")
 
-    @app.command(name="all-valid")
-    def all_valid_cmd(
-        output: str = typer.Option("output/json", help="JSON output directory"),
-        docs: str = typer.Option("output/docs", help="Documents output directory"),
-    ):
-        """Generate all valid scenarios."""
-        for name in VALID_SCENARIOS:
-            payload = _run_scenario(name, output_base=docs)
-            fpath = _save_json(payload, output)
-            console.print(f"[green]✓[/green] [bold]{name}[/bold] → {fpath}")
+    corrupted_banking = deepcopy(banking)
+    corrupted_banking["account_holder_name"] = "Rajesh Kumar Mehta"
 
-    @app.command(name="list-scenarios")
-    def list_scenarios():
-        """List all available scenarios."""
-        table = Table(title="Available Scenarios")
-        table.add_column("Name", style="bold")
-        table.add_column("Type")
-        for name in SCENARIO_MAP:
-            if name.startswith("valid_"):
-                tag = "[green]valid[/green]"
-            elif name.startswith("invalid_"):
-                tag = "[red]invalid[/red]"
-            else:
-                tag = "[cyan]edge[/cyan]"
-            table.add_row(name, tag)
-        console.print(table)
+    docs = generate_all_documents(
+        vendor_id=vendor_id,
+        output_base=str(case_dir / "docs"),
+        form_data=form_data,
+        legal_data=corrupted_legal,
+        banking_data=corrupted_banking,
+        compliance_data=compliance,
+    )
 
-    @app.command()
-    def test(
-        scenario: str = typer.Option("valid_pvt_ltd", help="Scenario to test"),
-        api_url: str = typer.Option("http://localhost:8000", help="Backend API base URL"),
-        docs: str = typer.Option("output/docs", help="Documents output directory"),
-    ):
-        """Generate and POST directly to the live API."""
-        try:
-            import httpx
-        except ImportError:
-            console.print("[red]httpx not installed. Run: pip install httpx[/red]")
-            raise typer.Exit(1)
+    save_case(
+        case_dir,
+        form_data,
+        docs,
+        {
+            "case": "case_02_ai_mismatch",
+            "description": (
+                "Form has correct PAN and company account holder. "
+                f"PAN card doc has PAN ending in '{corrupted_legal['pan_number'][-1]}' "
+                f"(form says '{pan[-1]}'). "
+                "Cancelled cheque shows 'Rajesh Kumar Mehta' — unrelated personal name."
+            ),
+            "expected_layer1": "submitted",
+            "expected_ai_decision": "waiting_for_response",
+            "expected_user_flags": ["pan_number mismatch", "account_holder_name mismatch"],
+            "expected_risk_factors": ["account_holder_name_mismatch"],
+            "form_pan": pan,
+            "doc_pan": corrupted_legal["pan_number"],
+        },
+    )
 
-        if scenario not in SCENARIO_MAP:
-            console.print(f"[red]Unknown scenario: {scenario}[/red]")
-            raise typer.Exit(1)
 
-        payload = _run_scenario(scenario, output_base=docs)
-        expected = payload.get("expected_result", {})
+# ── Case 3: High risk vendor ──────────────────────────────────────────────────
+# Docs match form exactly. Risk is in the form values themselves.
+# data_in_india=False, soc2=False, ISO expired ~13 months ago, low cyber coverage.
+# Expected: Layer 1 → submitted. AI → 4 risk factors. decision = human_review or high_risk_review.
 
-        console.print(f"POSTing [bold]{scenario}[/bold] to {api_url}/api/application/submit ...")
-        try:
-            resp = httpx.post(
-                f"{api_url}/api/application/submit",
-                json=payload["form_data"],
-                timeout=30,
-            )
-            status_code = resp.status_code
-            try:
-                body = resp.json()
-            except Exception:
-                body = resp.text
+def case_03_high_risk():
+    company = generate_company(company_type="Private Limited")
+    legal = generate_legal(company)
+    banking = generate_banking(company)
+    contact = generate_contact(company)
 
-            if expected.get("status") == "submitted" and status_code in (200, 201):
-                console.print(f"[green]PASS[/green] {status_code} — expected submitted, got {status_code}")
-            elif expected.get("status") == "incomplete" and status_code in (400, 422):
-                console.print(f"[green]PASS[/green] {status_code} — expected error, got error")
-            else:
-                console.print(f"[red]FAIL[/red] {status_code} — expected {expected.get('status')}")
-            console.print(f"Response: {body}")
-        except httpx.ConnectError:
-            console.print(f"[red]Could not connect to {api_url}. Is the backend running?[/red]")
+    expired_date = (date.today() - timedelta(days=400)).isoformat()
+    compliance = {
+        "service_nature": "Core Banking Software",
+        "processes_data": True,
+        "data_in_india": False,
+        "cloud_provider": "AWS",
+        "iso_certified": True,
+        "iso_cert_number": generate_iso_cert_number(),
+        "iso_expiry_date": expired_date,
+        "soc2_audited": False,
+        "cyber_insurance": True,
+        "cyber_coverage_crores": 1.0,
+    }
 
-    if __name__ == "__main__":
-        app()
+    vendor_id = f"vendor_{uuid.uuid4().hex[:8]}"
+    vendor = assemble_vendor(
+        company, legal, banking, compliance, contact,
+        output_base=str(OUT / "case_03_high_risk" / "docs"),
+        vendor_id=vendor_id,
+    )
 
-else:
-    # Minimal fallback without typer/rich
-    import argparse
+    save_case(
+        OUT / "case_03_high_risk",
+        vendor["form_data"],
+        vendor["documents"],
+        {
+            "case": "case_03_high_risk",
+            "description": (
+                f"data_in_india=False (offshore). soc2_audited=False. "
+                f"ISO cert expired {expired_date} (~13 months ago). "
+                "cyber_coverage=₹1Cr (low for data processor). "
+                "All docs match form — risk is in compliance posture only."
+            ),
+            "expected_layer1": "submitted",
+            "expected_ai_decision": "human_review or high_risk_review",
+            "expected_risk_factors": [
+                "data_offshore",
+                "processes_data_no_soc2",
+                "iso_cert_expired",
+                "low_cyber_coverage",
+            ],
+            "expected_user_flags": ["iso_cert (expired — vendor notified to renew)"],
+        },
+    )
 
-    def main():
-        parser = argparse.ArgumentParser(description="Vendor Onboarding Data Generator")
-        subparsers = parser.add_subparsers(dest="command")
 
-        s = subparsers.add_parser("single")
-        s.add_argument("--scenario", default="valid_pvt_ltd")
-        s.add_argument("--output", default="output/json")
-        s.add_argument("--docs", default="output/docs")
-
-        b = subparsers.add_parser("bulk")
-        b.add_argument("--count", type=int, default=10)
-        b.add_argument("--scenario", default="valid_pvt_ltd")
-        b.add_argument("--output", default="output/json")
-        b.add_argument("--docs", default="output/docs")
-
-        subparsers.add_parser("list-scenarios")
-        subparsers.add_parser("all-invalid")
-        subparsers.add_parser("all-valid")
-
-        args = parser.parse_args()
-
-        if args.command == "list-scenarios":
-            for name in SCENARIO_MAP:
-                print(name)
-        elif args.command == "single":
-            payload = _run_scenario(args.scenario, output_base=args.docs)
-            fpath = _save_json(payload, args.output)
-            print(f"Generated: {fpath}")
-        elif args.command == "bulk":
-            for _ in range(args.count):
-                payload = _run_scenario(args.scenario, output_base=args.docs)
-                fpath = _save_json(payload, args.output)
-                print(f"Generated: {fpath}")
-        elif args.command == "all-invalid":
-            for name in INVALID_SCENARIOS:
-                payload = _run_scenario(name, output_base="output/docs")
-                fpath = _save_json(payload, "output/json")
-                print(f"Generated: {fpath}")
-        elif args.command == "all-valid":
-            for name in VALID_SCENARIOS:
-                payload = _run_scenario(name, output_base="output/docs")
-                fpath = _save_json(payload, "output/json")
-                print(f"Generated: {fpath}")
-        else:
-            parser.print_help()
-
-    if __name__ == "__main__":
-        main()
+if __name__ == "__main__":
+    print("Generating 3 test cases...\n")
+    case_01_clean_pass()
+    case_02_ai_mismatch()
+    case_03_high_risk()
+    print(f"\nDone. Output in {OUT}/")
+    print("\nManual test steps per case:")
+    print("  1. Start backend:  uvicorn main:app --reload --port 8000")
+    print("  2. Login:          POST /api/auth/login with any email")
+    print("  3. Upload docs:    POST /api/documents/upload for each file in docs/vendor_*/")
+    print("  4. Submit:         POST /api/application/submit with payload.json body")
+    print("  5. Wait ~30s for OCR + AI pipeline to complete in background")
+    print("  6. Check Supabase: reviews table → risk_score, decision, risk_reasoning, user_flags")

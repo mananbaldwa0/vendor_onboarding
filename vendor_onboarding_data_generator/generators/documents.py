@@ -96,12 +96,13 @@ def generate_pan_card(vendor_dir: str, pan_number: str, company_name: str) -> st
     return path
 
 
-def generate_gst_cert(vendor_dir: str, gst_number: str, company_name: str) -> str:
+def generate_gst_cert(vendor_dir: str, gst_number: str, company_name: str, registration_date: str) -> str:
     path = os.path.join(vendor_dir, "gst_cert.pdf")
     lines = [
         "GOODS AND SERVICES TAX REGISTRATION CERTIFICATE",
         f"GSTIN: {gst_number}",
         f"Legal Name of Business: {company_name}",
+        f"Date of Registration: {registration_date}",
         "Registration Type: Regular",
         "Issued by: GST Council of India",
     ]
@@ -148,11 +149,12 @@ def generate_partnership_deed(vendor_dir: str, company_name: str, incorporation_
     return path
 
 
-def generate_cancelled_cheque(vendor_dir: str, ifsc_code: str, account_number: str, bank_name: str) -> str:
+def generate_cancelled_cheque(vendor_dir: str, ifsc_code: str, account_number: str, bank_name: str, account_holder_name: str) -> str:
     path = os.path.join(vendor_dir, "cancelled_cheque.jpg")
     lines = [
         "CANCELLED",
         bank_name,
+        f"Account Holder: {account_holder_name}",
         f"IFSC: {ifsc_code}",
         f"A/C No: {account_number}",
         "Pay _______________",
@@ -175,7 +177,7 @@ def generate_iso_cert(vendor_dir: str, cert_number: str, company_name: str, expi
     return path
 
 
-def generate_dpa(vendor_dir: str, company_name: str) -> str:
+def generate_dpa(vendor_dir: str, company_name: str, signatory_name: str) -> str:
     path = os.path.join(vendor_dir, "dpa.pdf")
     lines = [
         "DATA PROCESSING AGREEMENT",
@@ -184,17 +186,20 @@ def generate_dpa(vendor_dir: str, company_name: str) -> str:
         "This Data Processing Agreement governs the processing",
         "of personal data under applicable data protection laws.",
         "GDPR / PDPB compliant data processing terms apply.",
+        f"Authorised Signatory: {signatory_name}",
+        "Signed",
     ]
     _make_pdf(path, lines)
     return path
 
 
-def generate_msme_cert(vendor_dir: str, msme_number: str, company_name: str) -> str:
+def generate_msme_cert(vendor_dir: str, msme_number: str, company_name: str, category: str) -> str:
     path = os.path.join(vendor_dir, "msme_cert.pdf")
     lines = [
         "UDYAM REGISTRATION CERTIFICATE",
         f"Udyam Registration Number: {msme_number}",
         f"Name of Enterprise: {company_name}",
+        f"Enterprise Category: {category}",
         "Ministry of Micro, Small and Medium Enterprises",
         "Government of India",
     ]
@@ -217,6 +222,16 @@ def generate_all_documents(
     company_name = form_data["company_name"]
     company_type = form_data["company_type"]
     incorporation_date = form_data["incorporation_date"]
+    signatory_name = form_data.get("signatory_name", "Authorised Signatory")
+
+    # Derive MSME category from turnover bracket
+    turnover = form_data.get("annual_turnover", "<1 Cr")
+    if turnover == "<1 Cr":
+        msme_category = "Micro"
+    elif turnover == "1-10 Cr":
+        msme_category = "Small"
+    else:
+        msme_category = "Medium"
 
     # Always required
     pan_path = generate_pan_card(vendor_dir, legal_data["pan_number"], company_name)
@@ -227,12 +242,15 @@ def generate_all_documents(
         banking_data["ifsc_code"],
         banking_data["account_number"],
         banking_data["bank_name"],
+        banking_data["account_holder_name"],
     )
     docs.append({"doc_type": "cancelled_cheque", "file_path": cheque_path})
 
     # GST cert
     if legal_data.get("gst_registered") and legal_data.get("gst_number"):
-        gst_path = generate_gst_cert(vendor_dir, legal_data["gst_number"], company_name)
+        gst_path = generate_gst_cert(
+            vendor_dir, legal_data["gst_number"], company_name, incorporation_date
+        )
         docs.append({"doc_type": "gst_cert", "file_path": gst_path})
 
     # Company type docs
@@ -260,12 +278,12 @@ def generate_all_documents(
 
     # DPA
     if compliance_data.get("processes_data"):
-        dpa_path = generate_dpa(vendor_dir, company_name)
+        dpa_path = generate_dpa(vendor_dir, company_name, signatory_name)
         docs.append({"doc_type": "dpa", "file_path": dpa_path})
 
     # MSME cert
     if legal_data.get("msme_number"):
-        msme_path = generate_msme_cert(vendor_dir, legal_data["msme_number"], company_name)
+        msme_path = generate_msme_cert(vendor_dir, legal_data["msme_number"], company_name, msme_category)
         docs.append({"doc_type": "msme_cert", "file_path": msme_path})
 
     return docs

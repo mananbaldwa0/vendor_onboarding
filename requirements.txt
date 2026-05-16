@@ -6,3 +6,7 @@ python-multipart
 pydantic
 python-dotenv
 httpx
+pdfplumber
+pytesseract
+Pillow
+groq

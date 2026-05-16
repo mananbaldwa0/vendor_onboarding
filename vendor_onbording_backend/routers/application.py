@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from datetime import datetime, timezone
 from models.schemas import ApplicationSubmit, ApplicationResponse, StatusResponse
 from services.supabase_client import get_supabase
 from services.jwt_service import decode_token
 from services.validation import validate_application
+from services.ocr_service import run_ocr_pipeline
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
 
@@ -76,20 +77,12 @@ def _get_uploaded_doc_types(sb, vendor_id: str) -> list[str]:
 
 
 @router.post("/submit", response_model=ApplicationResponse)
-def submit_application(body: ApplicationSubmit, vendor_id: str = Depends(get_vendor_id)):
+def submit_application(
+    body: ApplicationSubmit,
+    background_tasks: BackgroundTasks,
+    vendor_id: str = Depends(get_vendor_id),
+):
     sb = get_supabase()
-
-    # Find existing draft (single query, reused for both doc fetch and upsert)
-    existing_draft = (
-        sb.table("applications")
-        .select("id,version")
-        .eq("vendor_id", vendor_id)
-        .eq("status", "draft")
-        .order("version", desc=True)
-        .limit(1)
-        .execute()
-    )
-    draft_id = existing_draft.data[0]["id"] if existing_draft.data else None
 
     uploaded_doc_types = _get_uploaded_doc_types(sb, vendor_id)
 
@@ -111,6 +104,10 @@ def submit_application(body: ApplicationSubmit, vendor_id: str = Depends(get_ven
     data["submitted_at"] = datetime.now(timezone.utc).isoformat()
     app_id, version = _upsert_application(sb, vendor_id, data)
     _link_docs(sb, vendor_id, app_id)
+
+    # Trigger OCR in background — non-blocking
+    background_tasks.add_task(run_ocr_pipeline, app_id, vendor_id)
+
     return ApplicationResponse(application_id=app_id, status="submitted", version=version)
 
 

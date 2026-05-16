@@ -170,7 +170,7 @@ No client-side validation — all checks run server-side.
 Shows:
 - Application ID
 - Version number
-- Status badge (color-coded: draft=gray, submitted=blue, approved=green, rejected=red, pending=yellow)
+- Status badge (color-coded: draft=yellow, submitted=blue, approved=green, rejected=red, pending=orange)
 - Submitted at timestamp
 - "Resubmit / Update" button → navigates to `/form`
 - "No application yet" state with Start Application button
@@ -242,7 +242,7 @@ Tested with 11 test cases (10 automated + 1 manual 3-round trail test).
 
 | Feature | Planned Phase |
 |---|---|
-| Show OCR verification result per document | Phase 2 |
+| Show OCR verification result per document | Phase 2 — backend OCR is done, frontend display pending |
 | Show AI risk score on status page | Phase 2 |
 | Client-side field validation (regex on frontend) | Backlog |
 | OTP auth on login (replace direct email login) | Phase 3 |

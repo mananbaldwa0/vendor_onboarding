@@ -1,5 +1,5 @@
 # Backend — Implementation Reference
-> Single source of truth. Phase 1 complete.
+> Single source of truth. Phase 1 + OCR pipeline complete.
 > Last updated: May 2026
 
 ---
@@ -14,6 +14,7 @@ A FastAPI server that:
 5. Upserts draft in-place until clean — new version only after a successful submit
 6. Supports in-place draft saves (no version bump, no validation)
 7. Returns current application status and version to the vendor
+8. Runs OCR pipeline in the background after every clean submit — extracts structured data from all uploaded documents
 
 ---
 
@@ -23,12 +24,15 @@ A FastAPI server that:
 |---|---|---|
 | Language | Python 3.11+ | — |
 | Framework | FastAPI | REST API + auto /docs UI |
-| Database | Supabase (PostgreSQL) | Stores vendors, applications, documents |
+| Database | Supabase (PostgreSQL) | Stores vendors, applications, documents, reviews |
 | File Storage | Supabase Storage | Stores uploaded PDFs/images |
 | Auth | PyJWT | Signs and verifies JWT tokens |
 | File Upload | python-multipart | Handles multipart/form-data |
 | Models | Pydantic | Request/response type validation |
 | Env Config | python-dotenv | Loads .env file |
+| PDF OCR | pdfplumber | Extracts embedded text from PDFs (no vision model needed) |
+| Image OCR | pytesseract + Pillow | Extracts text from JPG/PNG via Tesseract 5.x |
+| LLM | Groq API (LLaMA 3.3 70B) | Flag detection + risk reasoning — see AI.md |
 
 ---
 
@@ -113,14 +117,37 @@ CREATE TABLE applications (
 -- application_id is NULL when doc is "floating" (uploaded but not yet linked to a submission).
 -- Docs get linked to application_id at submit/draft time via _link_docs().
 -- vendor_id stored on every doc row — used for isolation and copy-forward logic.
+-- ocr_json populated by background OCR pipeline after clean submit.
+-- ocr_status lifecycle: not_started → processing → done / failed / skipped
 CREATE TABLE documents (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  application_id UUID REFERENCES applications(id),  -- NULL until submit/draft links it
+  application_id UUID REFERENCES applications(id),
   vendor_id UUID REFERENCES vendors(id),
   doc_type TEXT,
   file_name TEXT,
   file_url TEXT,
-  uploaded_at TIMESTAMP DEFAULT NOW()
+  uploaded_at TIMESTAMP DEFAULT NOW(),
+  ocr_json JSONB,
+  ocr_status TEXT DEFAULT 'not_started'
+);
+
+-- One row per submission. UNIQUE on application_id — upserted on retry, no duplicates.
+-- ai_status lifecycle: not_started → processing → done / failed
+-- decision values: approved | waiting_for_response | human_review | high_risk_review | rejected
+-- See AI.md for full pipeline details.
+CREATE TABLE reviews (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  application_id UUID REFERENCES applications(id) UNIQUE,
+  vendor_id UUID REFERENCES vendors(id),
+  user_flags JSONB,
+  risk_factors JSONB,
+  unreadable_docs JSONB,
+  notified_factors JSONB,
+  ai_status TEXT DEFAULT 'not_started',
+  risk_score INTEGER,
+  decision TEXT,
+  risk_reasoning TEXT,
+  created_at TIMESTAMP DEFAULT NOW()
 );
 ```
 
@@ -135,6 +162,17 @@ ALTER TABLE applications
 
 ALTER TABLE documents
   ADD COLUMN IF NOT EXISTS vendor_id UUID REFERENCES vendors(id);
+
+ALTER TABLE documents
+  ADD COLUMN IF NOT EXISTS ocr_json JSONB,
+  ADD COLUMN IF NOT EXISTS ocr_status TEXT DEFAULT 'not_started';
+
+-- reviews table new columns (add if table exists without them)
+ALTER TABLE reviews
+  ADD COLUMN IF NOT EXISTS notified_factors JSONB,
+  ADD COLUMN IF NOT EXISTS risk_score INTEGER,
+  ADD COLUMN IF NOT EXISTS decision TEXT,
+  ADD COLUMN IF NOT EXISTS risk_reasoning TEXT;
 ```
 
 **Storage bucket:** create `vendor-docs` in Supabase Storage → public: OFF.
@@ -212,7 +250,7 @@ All floating docs get stamped with the application's ID.
 
 ---
 
-## Validation — Rule-Based (Phase 1)
+## Validation — Rule-Based
 
 Runs on every `POST /submit`. Draft saves skip validation entirely.
 
@@ -283,6 +321,66 @@ Free email domains blocked for `contact_email`: gmail.com, yahoo.com, hotmail.co
 
 ---
 
+## OCR Pipeline
+
+Runs as a FastAPI `BackgroundTask` after every clean submit. Triggered in `routers/application.py`:
+
+```python
+background_tasks.add_task(run_ocr_pipeline, app_id, vendor_id)
+```
+
+### Flow (`services/ocr_service.py`)
+
+```
+1. Query all doc rows for this application_id
+2. For each doc:
+   a. SET ocr_status = 'processing'
+   b. Download file bytes from Supabase Storage (path: {vendor_id}/{doc_type}/{file_name})
+   c. Route by file extension: .jpg/.jpeg/.png → image extractor; else → PDF extractor
+   d. Extract structured dict
+   e. SET ocr_status = 'done', ocr_json = result
+   f. On exception: SET ocr_status = 'failed', ocr_json = { "error": "..." }
+```
+
+### PDF Extractor (`services/ocr_extractors/pdf_extractor.py`)
+
+Uses `pdfplumber` — reads embedded text directly (no vision model needed). Extraction uses same-line label:value pattern:
+
+```python
+def _label_value(text, label_pattern):
+    # label_pattern MUST be wrapped in (?:...) non-capturing group when it contains |
+    m = re.search(r'(?:' + label_pattern + r')[:\s]+([^\n]+)', text, re.IGNORECASE)
+    val = m.group(1) if m else None
+    return val.strip() if val else None
+```
+
+| doc_type | Extracted fields |
+|---|---|
+| `gst_cert` | gstin, legal_name, registration_date |
+| `incorporation` | cin_number, company_name, incorporation_date |
+| `llp_agreement` | llp_number, company_name |
+| `partnership_deed` | firm_name |
+| `iso_cert` | cert_number, company_name, expiry_date, standard_text |
+| `dpa` | company_name, is_signed, signing_date |
+| `msme_cert` | udyam_number, enterprise_name, category |
+
+### Image Extractor (`services/ocr_extractors/image_extractor.py`)
+
+Uses `pytesseract` + `Pillow`. Requires Tesseract 5.x system binary (`brew install tesseract`).
+
+IFSC handling:
+- Pattern accepts `[0O]` at position 4 (OCR often reads letter O instead of digit 0)
+- `_normalize_ifsc()` converts letter O → digit 0 at position 4 after extraction
+
+| doc_type | Extracted fields |
+|---|---|
+| `pan_card` | pan_number, name_on_card |
+| `cancelled_cheque` | ifsc_code, account_number, account_holder_name, cancelled_watermark |
+
+All extractors also return `raw_text` (stored in `ocr_json` for debugging).
+
+---
+
 ## API Endpoints
 
 ### `POST /api/auth/login`
@@ -312,20 +410,19 @@ Returns all doc rows for this vendor (floating + linked to any version).
 - Used by frontend on page load to pre-populate "✓ Uploaded" state
 ```json
 Response: [
-  { "doc_type": "pan_card", "file_name": "pan.jpg", "file_url": "https://..." },
-  { "doc_type": "cancelled_cheque", "file_name": "cheque.jpg", "file_url": "https://..." }
+  { "doc_type": "pan_card", "file_name": "pan.jpg", "file_url": "https://..." }
 ]
 ```
 
 ---
 
 ### `POST /api/application/submit`
-Runs full validation. Upserts using draft-in-place logic.
+Runs full validation. Upserts using draft-in-place logic. Fires OCR pipeline in background on clean submit.
 - Auth: Bearer token required
 - Body: JSON with any/all form fields
 - Doc validation checks ALL vendor docs ever uploaded (no version filter)
-- If errors → status = `draft`, errors returned (all correct fields still saved)
-- If clean → status = `submitted`
+- If errors → status = `draft`, errors returned
+- If clean → status = `submitted`, OCR pipeline fires in background
 ```json
 Response (clean):  { "application_id": "uuid", "status": "submitted", "version": 2, "errors": [] }
 Response (errors): { "application_id": "uuid", "status": "draft",     "version": 2, "errors": ["PAN ..."] }
@@ -357,23 +454,16 @@ Response: { "application": null }
 ### `GET /api/application/{id}`
 Returns a specific application row by UUID.
 - Auth: Bearer token required
-```json
-Response: { full application row as JSON }
-```
 
 ---
 
 ### `DELETE /api/documents/all`
-Deletes all documents for this vendor from documents table.
-- Auth: Bearer token required
-- Use case: test runner cleanup before each test run
+Deletes all documents for this vendor. Use case: test runner cleanup.
 
 ---
 
 ### `DELETE /api/application/reset`
-Deletes all applications for this vendor.
-- Auth: Bearer token required
-- Use case: test runner cleanup before each test run
+Deletes all applications for this vendor. Use case: test runner cleanup.
 
 ---
 
@@ -387,12 +477,10 @@ def _upsert_application(sb, vendor_id, data) -> tuple[str, int]:
 
 def _link_docs(sb, vendor_id, app_id):
     # SET application_id = app_id WHERE vendor_id = vendor_id AND application_id IS NULL
-    # Stamps floating docs to current app. Previous versions' docs untouched.
 
 def _get_uploaded_doc_types(sb, vendor_id) -> list[str]:
     # SELECT doc_type FROM documents WHERE vendor_id = vendor_id
     # Returns all doc_types ever uploaded — no application_id filter.
-    # Simple. Demo-scale. Computationally heavier than version-scoped query but no edge cases.
 ```
 
 ---
@@ -417,8 +505,11 @@ vendor_onbording_backend/
 ├── requirements.txt
 ├── .env
 ├── .env.example
-├── phase1_claude_code_prompt.md  ← this file
+├── BACKEND.md           ← this file
+├── AI.md                — AI pipeline reference (Layer 3)
 ├── validation_rules.md
+├── risk_test_runner.py  — offline risk scoring test (no Supabase needed)
+├── ai_test_runner.py    — offline AI flag detection test
 ├── routers/
 │   ├── auth.py              — POST /api/auth/login
 │   ├── documents.py         — POST /upload, GET /, DELETE /all
@@ -426,7 +517,13 @@ vendor_onbording_backend/
 ├── services/
 │   ├── supabase_client.py
 │   ├── jwt_service.py
-│   └── validation.py
+│   ├── validation.py
+│   ├── ocr_service.py       — run_ocr_pipeline(app_id, vendor_id) → chains run_ai_pipeline()
+│   ├── ai_service.py        — AI flag detection + risk scoring + reasoning (see AI.md)
+│   └── ocr_extractors/
+│       ├── __init__.py
+│       ├── pdf_extractor.py — pdfplumber extractors for all PDF doc types
+│       └── image_extractor.py — pytesseract extractors for pan_card, cancelled_cheque
 └── models/
     └── schemas.py
 ```
@@ -442,6 +539,8 @@ uvicorn main:app --reload --port 8000
 # API docs at: http://localhost:8000/docs
 ```
 
+Tesseract required for image OCR: `brew install tesseract`
+
 ---
 
 ## Known Gotchas
@@ -452,25 +551,27 @@ uvicorn main:app --reload --port 8000
 | `date is not JSON serializable` | Use `model_dump(mode="json", exclude_none=True)` — converts `date` to ISO string |
 | `Invalid token` 401 | JWT_SECRET changed after login — re-login to get fresh token |
 | Frontend ECONNREFUSED | Backend not running — need two terminals (backend + frontend) |
-| `False` value triggers "Specify..." error | `model_dump(exclude_none=True)` keeps `False`; only `None` excluded. If frontend sends `null`, Pydantic sets `None` → excluded → backend sees missing field → error. Fix: initialize all boolean form fields to `false` not `null`. |
+| `False` triggers "Specify..." error | `model_dump(exclude_none=True)` keeps `False`; only `None` excluded. Frontend must init booleans to `false` not `null`. |
 | Supabase `.is_()` syntax | Use `.is_("application_id", "null")` for NULL checks in Python client |
 | Supabase OR query | `.or_(f"application_id.eq.{draft_id},application_id.is.null")` |
+| OCR IFSC reads O instead of 0 | `RE_IFSC` accepts `[0O]`; `_normalize_ifsc()` corrects letter O at position 4 |
+| `_label_value` with `\|` alternation | Wrap label_pattern in `(?:...)` — bare `\|` in the pattern shifts captured group index |
 
 ---
 
-## Phase 1 Status — COMPLETE
+## Status
 
-All endpoints built and tested. 11 test cases pass (10 automated + 1 manual trail test).
+**Phase 1 — COMPLETE:** All endpoints built and tested. 11 test cases pass (10 automated + 1 manual trail test).
 
-## What Is NOT Built Yet (Phase 2)
+**OCR Pipeline — COMPLETE:** All 7 PDF doc types + 2 image doc types extract correctly. Runs as background task after clean submit. Results stored in `documents.ocr_json` / `documents.ocr_status`. All-null OCR result → `ocr_status = failed` (not done).
+
+**AI Pipeline — COMPLETE:** See `AI.md` for full details. Flag detection (Groq LLaMA 3.3 70B) + risk scoring (pure code) + reasoning (Groq) all run after OCR. Results stored in `reviews` table.
+
+## What Is NOT Built Yet
 
 | Feature | Notes |
 |---|---|
-| OCR — extract text from uploaded documents | Use pytesseract or Google Vision API. Extract PAN from pan_card image, IFSC from cheque, etc. |
-| AI field matching — compare OCR output to form fields | e.g. PAN extracted from image must match pan_number field. Flag mismatches. |
-| AI fuzzy name check — account_holder_name vs company_name | Levenshtein / fuzzy match. Phase 1 passes this through unchecked. |
-| Risk score (0–100) per submission | Weighted sum of flags: offshore data, no ISO, no SOC2, free email, etc. |
-| Reviews table | One row per submission: `{ application_id, risk_score, flags[], verdict, reviewer_note }` |
+| Email notification to vendor after OCR flags | Send `user_flags` to vendor email. Phase 2. |
 | OTP email verification on login | Phase 3 |
 | Admin dashboard | Phase 4 |
 | GET /history — all versions for a vendor | Backlog |
