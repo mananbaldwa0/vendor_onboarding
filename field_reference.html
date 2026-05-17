@@ -40,19 +40,18 @@
   .check-list li { padding: 2px 0; font-size: 12.5px; color: #374151; }
   .check-list li::before { content: '• '; color: #94a3b8; }
 
-  /* Badge types */
   .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin: 2px 2px 2px 0; white-space: nowrap; }
-  .b-done   { background: #dcfce7; color: #166534; }   /* green — Phase 1 done */
-  .b-ocr    { background: #dbeafe; color: #1e40af; }   /* blue — OCR extract */
-  .b-ai     { background: #fef3c7; color: #92400e; }   /* amber — AI check */
-  .b-api    { background: #f3e8ff; color: #6b21a8; }   /* purple — external API */
-  .b-cross  { background: #fee2e2; color: #991b1b; }   /* red — cross-field */
-  .b-future { background: #f0fdf4; color: #14532d; border: 1px dashed #86efac; } /* future field */
-  .b-warn   { background: #fff7ed; color: #c2410c; }   /* warning only */
-  .b-none   { background: #f1f5f9; color: #94a3b8; }   /* no check */
+  .b-done   { background: #dcfce7; color: #166534; }
+  .b-ocr    { background: #dbeafe; color: #1e40af; }
+  .b-ai     { background: #fef3c7; color: #92400e; }
+  .b-cross  { background: #fee2e2; color: #991b1b; }
+  .b-warn   { background: #fff7ed; color: #c2410c; }
+  .b-none   { background: #f1f5f9; color: #94a3b8; }
 
   .cross-pill { display: inline-block; font-family: monospace; font-size: 11px; background: #fef2f2; color: #dc2626; padding: 1px 6px; border-radius: 3px; margin: 1px; }
-  .future-field { font-size: 11.5px; color: #059669; font-style: italic; }
+
+  .def { font-size: 12.5px; color: #374151; line-height: 1.55; }
+  .def-example { display: block; margin-top: 5px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; color: #6366f1; background: #f5f3ff; padding: 2px 6px; border-radius: 3px; }
 
   .na { color: #cbd5e1; font-size: 12px; }
 
@@ -66,7 +65,7 @@
 
 <header>
   <h1>Vendor Onboarding — Field Reference</h1>
-  <p>All 8 groups · Every field · Rule checks · OCR · AI · Cross-field · Future extensions</p>
+  <p>All 8 groups · Every field · Rule checks · OCR · AI · Cross-field · Definitions</p>
 </header>
 
 <div class="controls">
@@ -88,10 +87,8 @@
   <span class="badge b-done">Phase 1 Done</span>
   <span class="badge b-ocr">OCR Extract</span>
   <span class="badge b-ai">AI Check</span>
-  <span class="badge b-api">External API</span>
   <span class="badge b-cross">Cross-Field</span>
   <span class="badge b-warn">Warning Only</span>
-  <span class="badge b-future">Future Field</span>
   <span class="badge b-none">No Check</span>
 </div>
 
@@ -106,7 +103,7 @@
     <th style="width:200px">Phase 2 — OCR Check</th>
     <th style="width:220px">Phase 2 — AI Check</th>
     <th style="width:180px">Cross-Field Deps</th>
-    <th style="width:200px">Future Extensions</th>
+    <th style="width:220px">Definition</th>
   </tr>
 </thead>
 <tbody>
@@ -129,9 +126,7 @@
   <td>
     <span class="badge b-ai">AI Check</span>
     <ul class="check-list">
-      <li>Match against MCA company search API</li>
-      <li>Verify company is active (not struck off)</li>
-      <li>Flag if name doesn't end in Pvt Ltd / LLP etc. matching company_type</li>
+      <li>Flag if name suffix doesn't match company_type (e.g. no "Pvt Ltd" for Pvt Ltd type)</li>
     </ul>
   </td>
   <td>
@@ -140,8 +135,9 @@
     <span class="cross-pill">contact_email</span>
   </td>
   <td>
-    <span class="future-field">trade_name (DBA) — different from legal name</span><br>
-    <span class="future-field">mca_status — Active / Struck Off</span>
+    <span class="def">Legal registered name of the company as per MCA records.
+      <span class="def-example">e.g. "Acme Technologies Pvt Ltd"</span>
+    </span>
   </td>
 </tr>
 
@@ -168,7 +164,11 @@
     <span class="cross-pill">llp_agreement doc</span> required if LLP<br>
     <span class="cross-pill">partnership_deed doc</span> required if Partnership
   </td>
-  <td><span class="na">—</span></td>
+  <td>
+    <span class="def">Legal structure of the business. Determines which ID fields and documents are required.
+      <span class="def-example">Pvt Ltd → CIN + DIN required; LLP → DPIN + LLP number required</span>
+    </span>
+  </td>
 </tr>
 
 <tr class="g1">
@@ -190,17 +190,14 @@
       <li>Match against this field</li>
     </ul>
   </td>
-  <td>
-    <span class="badge b-ai">AI Check</span>
-    <ul class="check-list">
-      <li>Verify against MCA records API</li>
-    </ul>
-  </td>
+  <td><span class="na">—</span></td>
   <td>
     <span class="cross-pill">cin_number</span> year must match
   </td>
   <td>
-    <span class="future-field">registration_number — MCA internal ref</span>
+    <span class="def">Date the company was officially registered with MCA (Registrar of Companies).
+      <span class="def-example">e.g. "2010-03-15"</span>
+    </span>
   </td>
 </tr>
 
@@ -220,7 +217,6 @@
     <span class="badge b-ai">AI Check</span>
     <ul class="check-list">
       <li>Fuzzy match against address in GST certificate</li>
-      <li>Match against MCA registered address</li>
     </ul>
   </td>
   <td>
@@ -228,7 +224,9 @@
     <span class="cross-pill">city</span>
   </td>
   <td>
-    <span class="future-field">pincode — validate format + state match</span>
+    <span class="def">Official address on file with MCA. Must be a physical address — not a PO box.
+      <span class="def-example">e.g. "Plot 44, Sector 18, Gurugram, Haryana 122015"</span>
+    </span>
   </td>
 </tr>
 
@@ -246,7 +244,11 @@
     <ul class="check-list"><li>Verify city belongs to selected state</li></ul>
   </td>
   <td><span class="cross-pill">state</span></td>
-  <td><span class="na">—</span></td>
+  <td>
+    <span class="def">City where the registered office is located.
+      <span class="def-example">e.g. "Bengaluru"</span>
+    </span>
+  </td>
 </tr>
 
 <tr class="g1">
@@ -263,7 +265,11 @@
     <span class="cross-pill">gst_number</span> chars 1–2 must match state code<br>
     <span class="cross-pill">msme_number</span> state abbr must match
   </td>
-  <td><span class="na">—</span></td>
+  <td>
+    <span class="def">Indian state/UT of the registered office. Drives GST state code validation.
+      <span class="def-example">e.g. "Karnataka" → GST state code 29</span>
+    </span>
+  </td>
 </tr>
 
 <tr class="g1">
@@ -286,8 +292,7 @@
     <span class="cross-pill">msme_number</span> — no hard block but AI flag
   </td>
   <td>
-    <span class="future-field">pf_registered — provident fund registration</span>
-    <span class="future-field">esic_registered — ESIC for employees &gt;10</span>
+    <span class="def">Total number of employees on payroll. Used to cross-check against turnover for implausible size combinations.</span>
   </td>
 </tr>
 
@@ -309,8 +314,7 @@
   </td>
   <td><span class="cross-pill">employee_count</span></td>
   <td>
-    <span class="future-field">exact_turnover_lakhs — precise figure</span>
-    <span class="future-field">financial_year — which FY the turnover refers to</span>
+    <span class="def">Revenue bracket for the last financial year. "10–100 Cr" means ₹10–100 crore annual revenue.</span>
   </td>
 </tr>
 
@@ -326,13 +330,15 @@
   <td>
     <span class="badge b-ai">AI Check</span>
     <ul class="check-list">
-      <li>Verify site is live (HTTP ping)</li>
       <li>Domain must match contact_email domain</li>
-      <li>Check if site mentions company name</li>
     </ul>
   </td>
   <td><span class="cross-pill">contact_email</span> domain must match</td>
-  <td><span class="na">—</span></td>
+  <td>
+    <span class="def">Company's official public website. Domain must match the contact email domain to prove ownership.
+      <span class="def-example">e.g. "https://acmecorp.in"</span>
+    </span>
+  </td>
 </tr>
 
 <!-- ═══ GROUP 2: PAN ═══ -->
@@ -357,21 +363,15 @@
       <li>Match against pan_number field</li>
     </ul>
   </td>
-  <td>
-    <span class="badge b-api">External API</span>
-    <ul class="check-list">
-      <li>NSDL/UTI PAN verification API — is PAN active?</li>
-      <li>Check PAN name matches company_name</li>
-      <li>Flag if PAN is linked to another entity</li>
-    </ul>
-  </td>
+  <td><span class="na">—</span></td>
   <td>
     <span class="cross-pill">gst_number</span> chars 3–12 must equal PAN<br>
     <span class="cross-pill">company_type</span> drives 4th char
   </td>
   <td>
-    <span class="future-field">pan_name — name as on PAN card</span>
-    <span class="future-field">pan_status — Active / Inoperative</span>
+    <span class="def">10-char tax ID issued by the Income Tax Department. 4th character encodes entity type: C=Company, F=Firm, P=Individual.
+      <span class="def-example">e.g. "AABCS1234D" — 4th char C = Company</span>
+    </span>
   </td>
 </tr>
 
@@ -393,7 +393,7 @@
     <span class="cross-pill">gst_cert doc</span> required if true
   </td>
   <td>
-    <span class="future-field">gst_exemption_reason — if not registered</span>
+    <span class="def">Whether the company is registered under GST. Mandatory if annual turnover exceeds ₹40L (goods) or ₹20L (services) in most states.</span>
   </td>
 </tr>
 
@@ -417,22 +417,16 @@
       <li>Match against gst_number field</li>
     </ul>
   </td>
-  <td>
-    <span class="badge b-api">External API</span>
-    <ul class="check-list">
-      <li>GSTIN lookup API — verify status (Active / Cancelled / Suspended)</li>
-      <li>Check if filing is regular (not defaulter)</li>
-      <li>Verify legal name from GSTIN matches company_name</li>
-    </ul>
-  </td>
+  <td><span class="na">—</span></td>
   <td>
     <span class="cross-pill">state</span> state code<br>
     <span class="cross-pill">pan_number</span> embedded<br>
     <span class="cross-pill">gst_registered</span>
   </td>
   <td>
-    <span class="future-field">gst_filing_status — regular / defaulter</span>
-    <span class="future-field">gst_category — Regular / Composition</span>
+    <span class="def">15-char GST Identification Number. Structure: 2-digit state code + 10-char PAN + entity number + Z + check digit.
+      <span class="def-example">e.g. "27AABCS1234D1ZV" — 27 = Maharashtra</span>
+    </span>
   </td>
 </tr>
 
@@ -451,8 +445,7 @@
   <td>
     <span class="badge b-ai">AI Check</span>
     <ul class="check-list">
-      <li>Verify name matches DIN holder name from MCA records</li>
-      <li>Check signatory is a current director (not resigned)</li>
+      <li>Verify name appears in LLP Agreement / Partnership Deed (for LLP/Partnership types)</li>
     </ul>
   </td>
   <td>
@@ -460,7 +453,9 @@
     <span class="cross-pill">dpin</span> for LLP
   </td>
   <td>
-    <span class="future-field">signatory_designation — Director / Partner / Proprietor</span>
+    <span class="def">Name of the person legally authorized to sign agreements on behalf of the company. Must be a current director/designated partner.
+      <span class="def-example">e.g. "Rahul Sharma" — a director of the Pvt Ltd</span>
+    </span>
   </td>
 </tr>
 
@@ -476,21 +471,16 @@
     </ul>
   </td>
   <td><span class="na">—</span></td>
-  <td>
-    <span class="badge b-api">External API</span>
-    <ul class="check-list">
-      <li>MCA DIN lookup — is DIN active?</li>
-      <li>Verify DIN is linked to this company's CIN</li>
-      <li>Name on DIN matches signatory_name</li>
-    </ul>
-  </td>
+  <td><span class="na">—</span></td>
   <td>
     <span class="cross-pill">company_type</span> only for Pvt/Public Ltd<br>
     <span class="cross-pill">cin_number</span> DIN must be linked to CIN<br>
     <span class="cross-pill">signatory_name</span>
   </td>
   <td>
-    <span class="future-field">din_status — Approved / Disqualified</span>
+    <span class="def">8-digit Director Identification Number issued by MCA. Every director of a company must have one — unique per person, not per company.
+      <span class="def-example">e.g. "07123456"</span>
+    </span>
   </td>
 </tr>
 
@@ -506,18 +496,16 @@
     </ul>
   </td>
   <td><span class="na">—</span></td>
-  <td>
-    <span class="badge b-api">External API</span>
-    <ul class="check-list">
-      <li>MCA DPIN lookup — is DPIN active?</li>
-      <li>Verify linked to this LLP</li>
-    </ul>
-  </td>
+  <td><span class="na">—</span></td>
   <td>
     <span class="cross-pill">company_type</span> LLP only<br>
     <span class="cross-pill">llp_number</span>
   </td>
-  <td><span class="na">—</span></td>
+  <td>
+    <span class="def">8-digit Designated Partner Identification Number — same concept as DIN but for LLP partners instead of company directors.
+      <span class="def-example">e.g. "09876543"</span>
+    </span>
+  </td>
 </tr>
 
 <tr class="g4">
@@ -539,21 +527,16 @@
       <li>Match against cin_number field</li>
     </ul>
   </td>
-  <td>
-    <span class="badge b-api">External API</span>
-    <ul class="check-list">
-      <li>MCA CIN lookup — company status active?</li>
-      <li>Verify company name matches</li>
-      <li>Check for any pending charges / liquidation</li>
-    </ul>
-  </td>
+  <td><span class="na">—</span></td>
   <td>
     <span class="cross-pill">incorporation_date</span> year must match<br>
     <span class="cross-pill">company_type</span> Pvt/Public Ltd only<br>
     <span class="cross-pill">state</span> state abbr in CIN
   </td>
   <td>
-    <span class="future-field">mca_company_status — Active / Struck Off / Under Liquidation</span>
+    <span class="def">21-char Company Identification Number assigned at incorporation. Encodes: activity type + NIC industry code + state + year + company type + serial.
+      <span class="def-example">e.g. "U72900MH2010PTC123456" — U=unlisted, MH=Maharashtra, 2010=year</span>
+    </span>
   </td>
 </tr>
 
@@ -575,14 +558,13 @@
       <li>Match against llp_number field</li>
     </ul>
   </td>
-  <td>
-    <span class="badge b-api">External API</span>
-    <ul class="check-list">
-      <li>MCA LLP lookup — active status?</li>
-    </ul>
-  </td>
-  <td><span class="cross-pill">company_type</span> LLP only</td>
   <td><span class="na">—</span></td>
+  <td><span class="cross-pill">company_type</span> LLP only</td>
+  <td>
+    <span class="def">Unique registration ID for a Limited Liability Partnership, assigned by MCA. Equivalent to CIN for companies.
+      <span class="def-example">e.g. "AAE-1234"</span>
+    </span>
+  </td>
 </tr>
 
 <tr class="g4">
@@ -594,7 +576,6 @@
     <ul class="check-list">
       <li>Optional</li>
       <li>Regex: UDYAM-XX-00-0000000</li>
-      <li>No employee count or turnover restriction (removed)</li>
     </ul>
   </td>
   <td>
@@ -604,21 +585,15 @@
       <li>Match against msme_number field</li>
     </ul>
   </td>
-  <td>
-    <span class="badge b-api">External API</span>
-    <ul class="check-list">
-      <li>Udyam portal API — verify registration is active</li>
-      <li>Check MSME category (Micro / Small / Medium)</li>
-      <li>Verify PAN linked to this MSME matches pan_number</li>
-    </ul>
-  </td>
+  <td><span class="na">—</span></td>
   <td>
     <span class="cross-pill">state</span> state abbr in MSME number<br>
     <span class="cross-pill">msme_cert doc</span> required if provided
   </td>
   <td>
-    <span class="future-field">msme_category — Micro / Small / Medium</span>
-    <span class="future-field">udyam_status — Active / Cancelled</span>
+    <span class="def">Udyam registration number for Micro/Small/Medium enterprises issued by the MSME Ministry. Format: UDYAM-[state]-[district]-[serial].
+      <span class="def-example">e.g. "UDYAM-MH-15-0012345"</span>
+    </span>
   </td>
 </tr>
 
@@ -650,7 +625,7 @@
   </td>
   <td><span class="cross-pill">company_name</span> fuzzy match</td>
   <td>
-    <span class="future-field">penny_drop — ₹1 credit to verify account is live</span>
+    <span class="def">Name registered on the bank account. Should closely match the company name — verified against the cancelled cheque.</span>
   </td>
 </tr>
 
@@ -667,12 +642,13 @@
     <span class="badge b-ai">AI Check</span>
     <ul class="check-list">
       <li>Verify IFSC prefix matches bank_name (HDFC0... → HDFC Bank)</li>
-      <li>Check bank is RBI-licensed</li>
     </ul>
   </td>
   <td><span class="cross-pill">ifsc_code</span> prefix must match bank</td>
   <td>
-    <span class="future-field">bank_branch — branch name from IFSC API</span>
+    <span class="def">Name of the bank where the company holds its account.
+      <span class="def-example">e.g. "HDFC Bank", "State Bank of India"</span>
+    </span>
   </td>
 </tr>
 
@@ -694,18 +670,16 @@
       <li>Match against this field</li>
     </ul>
   </td>
-  <td>
-    <span class="badge b-api">External API</span>
-    <ul class="check-list">
-      <li>Penny drop / bank account verification API</li>
-      <li>Confirms account is active and name matches</li>
-    </ul>
-  </td>
+  <td><span class="na">—</span></td>
   <td>
     <span class="cross-pill">ifsc_code</span> together identify the account<br>
     <span class="cross-pill">account_holder_name</span>
   </td>
-  <td><span class="na">—</span></td>
+  <td>
+    <span class="def">Unique identifier for the bank account, 9–18 digits. Pre-printed on every cheque leaf.
+      <span class="def-example">e.g. "50100123456789"</span>
+    </span>
+  </td>
 </tr>
 
 <tr class="g5">
@@ -727,18 +701,18 @@
     </ul>
   </td>
   <td>
-    <span class="badge b-api">External API</span>
+    <span class="badge b-ai">AI Check</span>
     <ul class="check-list">
-      <li>RBI IFSC API — verify branch exists</li>
-      <li>Get bank name from IFSC, compare with bank_name field</li>
+      <li>First 4 chars of IFSC must match bank_name prefix</li>
     </ul>
   </td>
   <td>
     <span class="cross-pill">bank_name</span> prefix must match
   </td>
   <td>
-    <span class="future-field">branch_city — from IFSC lookup</span>
-    <span class="future-field">micr_code — for ECS/NEFT routing</span>
+    <span class="def">11-char Indian Financial System Code identifying a specific bank branch. First 4 = bank code, 5th always 0, last 6 = branch ID. Used for NEFT/RTGS transfers.
+      <span class="def-example">e.g. "HDFC0001234" — HDFC Bank, branch 001234</span>
+    </span>
   </td>
 </tr>
 
@@ -762,7 +736,9 @@
     </ul>
   </td>
   <td><span class="cross-pill">company_type</span></td>
-  <td><span class="na">—</span></td>
+  <td>
+    <span class="def">Current accounts are standard for businesses (no transaction limits). Savings accounts for a registered company is a red flag — suggests informal setup.</span>
+  </td>
 </tr>
 
 <!-- ═══ GROUP 6: ISO ═══ -->
@@ -783,7 +759,9 @@
     <span class="cross-pill">iso_expiry_date</span> required if true<br>
     <span class="cross-pill">iso_cert doc</span> required if true
   </td>
-  <td><span class="na">—</span></td>
+  <td>
+    <span class="def">Whether the company holds ISO/IEC 27001 certification — an international standard for Information Security Management Systems (ISMS).</span>
+  </td>
 </tr>
 
 <tr class="g6">
@@ -807,7 +785,6 @@
   <td>
     <span class="badge b-ai">AI Check</span>
     <ul class="check-list">
-      <li>Verify cert number format is consistent with issuing body (BSI / Bureau Veritas / TÜV)</li>
       <li>Check if company name on cert matches company_name</li>
     </ul>
   </td>
@@ -816,8 +793,9 @@
     <span class="cross-pill">iso_expiry_date</span>
   </td>
   <td>
-    <span class="future-field">iso_certifying_body — BSI / Bureau Veritas / TÜV etc.</span>
-    <span class="future-field">iso_scope — scope of certification</span>
+    <span class="def">Certificate number issued by the certifying body (BSI, Bureau Veritas, TÜV etc.). Printed prominently on the certificate.
+      <span class="def-example">e.g. "IS 123456" or "CERT-27001-2021-BSI"</span>
+    </span>
   </td>
 </tr>
 
@@ -847,7 +825,7 @@
   </td>
   <td><span class="cross-pill">iso_certified</span></td>
   <td>
-    <span class="future-field">iso_issue_date — when cert was issued</span>
+    <span class="def">Date the ISO 27001 certificate expires. Certs are valid for 3 years with annual surveillance audits. An expired cert means no active certification.</span>
   </td>
 </tr>
 
@@ -863,20 +841,17 @@
   <td>
     <span class="badge b-ai">AI Check</span>
     <ul class="check-list">
-      <li>If true, request SOC2 report document</li>
       <li>Factor into risk score (SOC2 = lower risk)</li>
     </ul>
   </td>
   <td><span class="na">—</span></td>
   <td>
-    <span class="future-field">soc2_report doc — upload audit report</span>
-    <span class="future-field">soc2_audit_period — date range covered</span>
-    <span class="future-field">soc2_auditor — firm that conducted audit</span>
+    <span class="def">SOC 2 Type II is a US-origin security audit framework for cloud/SaaS providers. Type II means controls were tested over a period (6–12 months), not just designed. Higher trust signal than Type I.</span>
   </td>
 </tr>
 
 <!-- ═══ GROUP 7: COMPLIANCE ═══ -->
-<tr class="group-header g7"><td colspan="8">Group 7 — Data & Compliance</td></tr>
+<tr class="group-header g7"><td colspan="8">Group 7 — Data &amp; Compliance</td></tr>
 
 <tr class="g7">
   <td><div class="field-name">service_nature</div></td>
@@ -893,16 +868,16 @@
   <td>
     <span class="badge b-ai">AI Check</span>
     <ul class="check-list">
-      <li>Auto-suggest based on company_name (e.g. "Security" in name → Cybersecurity Tool)</li>
-      <li>Consistency with website content</li>
+      <li>Consistency check: Core Banking Software → should process data</li>
     </ul>
   </td>
   <td>
     <span class="cross-pill">processes_data</span> Core Banking Software → always processes data
   </td>
   <td>
-    <span class="future-field">service_description — free text, for AI risk categorisation</span>
-    <span class="future-field">nic_code — industry code for RBI classification</span>
+    <span class="def">Category of IT service this vendor provides. Determines data risk level.
+      <span class="def-example">"Core Banking Software" = runs daily bank transactions; "Cybersecurity Tool" = monitors for threats</span>
+    </span>
   </td>
 </tr>
 
@@ -931,8 +906,7 @@
     <span class="cross-pill">service_nature</span>
   </td>
   <td>
-    <span class="future-field">data_types_processed — PII / financial / both</span>
-    <span class="future-field">data_volume — records per day/month</span>
+    <span class="def">Whether this vendor will receive or process Zamp's bank/customer data. If yes, cyber insurance and a signed DPA become mandatory before approval.</span>
   </td>
 </tr>
 
@@ -951,7 +925,6 @@
   <td>
     <span class="badge b-ai">AI Check</span>
     <ul class="check-list">
-      <li>If cloud_provider = AWS/Azure/GCP → ask which region</li>
       <li>If On-Premise → data_in_india should probably be true</li>
       <li>Add to risk score if false</li>
     </ul>
@@ -960,8 +933,7 @@
     <span class="cross-pill">cloud_provider</span> — On-Premise implies India
   </td>
   <td>
-    <span class="future-field">data_region — specific cloud region (ap-south-1 etc.)</span>
-    <span class="future-field">rbi_compliant — explicit RBI IT framework compliance flag</span>
+    <span class="def">RBI mandates that payment system data be stored only on servers physically located in India. "false" is not a hard block but triggers a compliance flag for review.</span>
   </td>
 </tr>
 
@@ -986,8 +958,9 @@
   </td>
   <td><span class="cross-pill">data_in_india</span></td>
   <td>
-    <span class="future-field">cloud_region — Mumbai / Singapore / US-East etc.</span>
-    <span class="future-field">cloud_shared_responsibility — SOC / CSA STAR cert</span>
+    <span class="def">Infrastructure platform used to host the vendor's services. On-Premise = vendor's own data centre. Cloud = shared infrastructure.
+      <span class="def-example">"AWS ap-south-1" = Mumbai region = data in India</span>
+    </span>
   </td>
 </tr>
 
@@ -1009,10 +982,7 @@
     <span class="cross-pill">cyber_coverage_crores</span> required if true
   </td>
   <td>
-    <span class="future-field">cyber_insurer — insurance company name</span>
-    <span class="future-field">cyber_policy_number — policy reference</span>
-    <span class="future-field">cyber_policy_expiry — must be future date</span>
-    <span class="future-field">cyber_policy doc — upload policy document</span>
+    <span class="def">Insurance policy covering losses from data breaches, ransomware, and system outages. Mandatory for any vendor that handles customer or banking data.</span>
   </td>
 </tr>
 
@@ -1039,7 +1009,11 @@
     <span class="cross-pill">cyber_insurance</span><br>
     <span class="cross-pill">annual_turnover</span> coverage should be proportionate
   </td>
-  <td><span class="na">—</span></td>
+  <td>
+    <span class="def">Maximum payout the cyber insurance policy covers, in Indian crores. Should be proportionate to company size.
+      <span class="def-example">"5" = ₹5 crore coverage limit</span>
+    </span>
+  </td>
 </tr>
 
 <!-- ═══ GROUP 8: CONTACT ═══ -->
@@ -1057,8 +1031,7 @@
   <td><span class="na">—</span></td>
   <td><span class="na">—</span></td>
   <td>
-    <span class="future-field">contact_designation — role of this person</span>
-    <span class="future-field">alternate_contact_name + phone</span>
+    <span class="def">Name of the person at the vendor company handling this onboarding. Does not need to be a director — can be a finance/legal representative.</span>
   </td>
 </tr>
 
@@ -1079,15 +1052,15 @@
     <span class="badge b-ai">AI Check</span>
     <ul class="check-list">
       <li>Email domain must match website domain</li>
-      <li>MX record check — is domain deliverable?</li>
-      <li>Check email is not a role address (info@, admin@) if high-risk vendor</li>
     </ul>
   </td>
   <td>
     <span class="cross-pill">website</span> domain must match
   </td>
   <td>
-    <span class="future-field">email_verified — OTP verification (Phase 3)</span>
+    <span class="def">Business email of the contact person. Must be on the company domain — free providers (Gmail, Yahoo) are blocked because they can't prove company ownership.
+      <span class="def-example">e.g. "rahul@acmecorp.in" not "rahul@gmail.com"</span>
+    </span>
   </td>
 </tr>
 
@@ -1106,14 +1079,14 @@
   <td>
     <span class="badge b-ai">AI Check</span>
     <ul class="check-list">
-      <li>Verify number format matches claimed country code</li>
-      <li>+91 → must be 10 digits after</li>
+      <li>+91 → must be 10 digits after the country code</li>
     </ul>
   </td>
   <td><span class="na">—</span></td>
   <td>
-    <span class="future-field">phone_verified — OTP SMS verification</span>
-    <span class="future-field">alternate_phone</span>
+    <span class="def">Contact number with international dialling prefix. Country code required to disambiguate number length rules by country.
+      <span class="def-example">e.g. "+919876543210" for Indian mobile</span>
+    </span>
   </td>
 </tr>
 
@@ -1144,12 +1117,13 @@
     <span class="badge b-ai">AI Check</span>
     <ul class="check-list">
       <li>Name on PAN card must fuzzy-match company_name</li>
-      <li>Detect if image is a photocopy/scan vs original</li>
-      <li>Tamper detection (font inconsistency, background noise)</li>
+      <li>Detect tamper signs (font inconsistency, background noise)</li>
     </ul>
   </td>
   <td><span class="cross-pill">pan_number</span> must match OCR extract</td>
-  <td><span class="na">—</span></td>
+  <td>
+    <span class="def">Scanned copy of the company's PAN card. Used to verify the PAN number via OCR and confirm the name matches the company.</span>
+  </td>
 </tr>
 
 <tr class="g9">
@@ -1185,7 +1159,9 @@
     <span class="cross-pill">account_number</span><br>
     <span class="cross-pill">account_holder_name</span>
   </td>
-  <td><span class="na">—</span></td>
+  <td>
+    <span class="def">A cheque with "CANCELLED" written across it. Has account number, IFSC, and account holder name pre-printed — verifies bank details without making a real transfer.</span>
+  </td>
 </tr>
 
 <tr class="g9">
@@ -1217,7 +1193,9 @@
     <span class="cross-pill">company_name</span><br>
     <span class="cross-pill">state</span>
   </td>
-  <td><span class="na">—</span></td>
+  <td>
+    <span class="def">GST registration certificate downloaded from the GST portal. Shows GSTIN, legal name, and date of registration.</span>
+  </td>
 </tr>
 
 <tr class="g9">
@@ -1248,7 +1226,9 @@
     <span class="cross-pill">cin_number</span><br>
     <span class="cross-pill">incorporation_date</span>
   </td>
-  <td><span class="na">—</span></td>
+  <td>
+    <span class="def">Certificate issued by MCA (Registrar of Companies) when a Pvt Ltd or Public Ltd company is formed. The founding document of the company.</span>
+  </td>
 </tr>
 
 <tr class="g9">
@@ -1277,7 +1257,9 @@
     <span class="cross-pill">llp_number</span><br>
     <span class="cross-pill">signatory_name</span>
   </td>
-  <td><span class="na">—</span></td>
+  <td>
+    <span class="def">The founding document of a Limited Liability Partnership — equivalent to the Certificate of Incorporation for a Pvt Ltd. Lists all partners and profit-sharing terms.</span>
+  </td>
 </tr>
 
 <tr class="g9">
@@ -1306,7 +1288,9 @@
     <span class="cross-pill">company_name</span><br>
     <span class="cross-pill">signatory_name</span>
   </td>
-  <td><span class="na">—</span></td>
+  <td>
+    <span class="def">Legal contract between partners in a partnership firm. Outlines firm name, profit-sharing ratios, and partner roles. Unregistered partnerships are common but riskier.</span>
+  </td>
 </tr>
 
 <tr class="g9">
@@ -1339,7 +1323,9 @@
     <span class="cross-pill">iso_expiry_date</span><br>
     <span class="cross-pill">company_name</span>
   </td>
-  <td><span class="na">—</span></td>
+  <td>
+    <span class="def">The physical ISO 27001 certificate document issued by the certifying body. Confirms scope, cert number, and validity period.</span>
+  </td>
 </tr>
 
 <tr class="g9">
@@ -1364,8 +1350,7 @@
   </td>
   <td><span class="cross-pill">processes_data</span></td>
   <td>
-    <span class="future-field">dpa_expiry — when DPA needs renewal</span>
-    <span class="future-field">dpdp_compliant — India DPDP Act 2023 compliance flag</span>
+    <span class="def">Legal contract defining how the vendor handles Zamp's data — what they can do with it, how long they keep it, and how they respond to breaches. Required under India's DPDP Act 2023.</span>
   </td>
 </tr>
 
@@ -1396,7 +1381,9 @@
     <span class="cross-pill">msme_number</span><br>
     <span class="cross-pill">company_name</span>
   </td>
-  <td><span class="na">—</span></td>
+  <td>
+    <span class="def">Udyam registration certificate from the MSME Ministry portal. Confirms the enterprise's MSME category (Micro/Small/Medium) and registration number.</span>
+  </td>
 </tr>
 
 </tbody>

@@ -1,5 +1,5 @@
 # Vendor Onboarding — Frontend Reference
-> Phase 1 complete. Last updated: May 2026
+> Phase 1 + Admin Dashboard complete. Last updated: May 2026
 
 ---
 
@@ -31,18 +31,29 @@ Backend must also be running at port 8000 (Vite proxies `/api` → `localhost:80
 | `/` | `Login.jsx` | Email input → POST /api/auth/login → stores token |
 | `/form` | `Form.jsx` | 8-group vendor form with docs upload, draft + submit |
 | `/status` | `Status.jsx` | Shows latest submission status, version, submitted_at |
+| `/admin` | `admin/AdminLogin.jsx` | Admin email login → POST /api/admin/login → stores adminToken |
+| `/admin/dashboard` | `admin/Dashboard.jsx` | 3-tab admin view: Vendors, Analytics, Documentation |
 
-Protected routes (`/form`, `/status`) redirect to `/` if no token in localStorage.
+Protected routes (`/form`, `/status`) redirect to `/` if no `token` in localStorage.
+Protected admin routes (`/admin/dashboard`) redirect to `/admin` if no `adminToken` in localStorage.
 
 ---
 
 ## Auth Flow
 
+### Vendor
 1. Vendor enters email on login page
 2. Backend returns JWT token + vendor_id
-3. Token stored in `localStorage`
-4. All API calls send `Authorization: Bearer <token>`
+3. Token stored in `localStorage` as `token`
+4. All vendor API calls send `Authorization: Bearer <token>`
 5. Logout clears localStorage → redirects to `/`
+
+### Admin
+1. Admin enters email at `/admin`
+2. Backend checks `ADMIN_EMAILS` env var — returns 403 if not allowed
+3. Admin JWT stored in `localStorage` as `adminToken` (separate from vendor `token`)
+4. Admin API calls use `adminToken` via `adminHeaders()`
+5. Vendor token cannot access admin endpoints — role claim checked server-side
 
 ---
 
@@ -180,6 +191,7 @@ Shows:
 
 ## API Calls (`src/api.js`)
 
+### Vendor
 | Function | Endpoint | Auth | Notes |
 |---|---|---|---|
 | `login(email)` | POST /api/auth/login | No | Returns token + vendor_id |
@@ -189,6 +201,12 @@ Shows:
 | `getApplication(id)` | GET /api/application/{id} | Bearer | Returns full application row |
 | `getDocuments()` | GET /api/documents/ | Bearer | Returns all doc rows for vendor |
 | `uploadDocument(file, docType)` | POST /api/documents/upload | Bearer | multipart/form-data |
+
+### Admin
+| Function | Endpoint | Auth | Notes |
+|---|---|---|---|
+| `adminLogin(email)` | POST /api/admin/login | No | Returns adminToken; throws 403 if not in ADMIN_EMAILS |
+| `adminGetVendors()` | GET /api/admin/vendors | adminToken | All vendors with latest application + review joined |
 
 ---
 
@@ -214,27 +232,34 @@ vendor_onboarding_frontend/
 ├── FRONTEND.md          — this file
 └── src/
     ├── main.jsx
-    ├── App.jsx           — routes + auth guard
-    ├── api.js            — all fetch calls
+    ├── App.jsx           — routes + auth guards (PrivateRoute + AdminRoute)
+    ├── api.js            — all fetch calls (vendor + admin)
     ├── index.css
+    ├── data/
+    │   └── fieldDocs.js  — static docs for 36 fields (used by Documentation tab)
     ├── pages/
     │   ├── Login.jsx
     │   ├── Form.jsx      — 8 groups + documents + draft + submit
-    │   └── Status.jsx
+    │   ├── Status.jsx
+    │   └── admin/
+    │       ├── AdminLogin.jsx  — dark theme email login → stores adminToken
+    │       └── Dashboard.jsx   — 3-tab: Vendors, Analytics, Documentation
     └── components/
         └── GroupCard.jsx
 ```
 
 ---
 
-## Phase 1 Status — COMPLETE
+## Status
 
-All pages built and working against live backend:
-- `/` Login with email → JWT stored in localStorage
-- `/form` 8-group form + document uploads + draft + submit + pre-filled from existing draft/docs
-- `/status` Shows latest application status + version + resubmit button
+**Phase 1 — COMPLETE:** Login, 8-group form, document uploads, draft + submit, status page. Tested with 11 test cases.
 
-Tested with 11 test cases (10 automated + 1 manual 3-round trail test).
+**Admin Dashboard — COMPLETE:**
+- `/admin` — dark theme email login, 403 guard for non-admin emails
+- `/admin/dashboard` — 3 tabs:
+  - **Vendors**: search bar + table with expandable rows showing risk score bar, decision badge, severity-tagged user_flags, risk_reasoning, risk_factors, unreadable_docs, notified_factors, email sent indicator
+  - **Analytics**: placeholder ("To be continued")
+  - **Documentation**: search + grouped accordions for all 36 fields, each with definition, why collected, example, documents, layer-1 validation, AI use, suggestion
 
 ---
 
@@ -246,4 +271,3 @@ Tested with 11 test cases (10 automated + 1 manual 3-round trail test).
 | Show AI risk score on status page | Phase 2 |
 | Client-side field validation (regex on frontend) | Backlog |
 | OTP auth on login (replace direct email login) | Phase 3 |
-| Admin dashboard | Phase 4 |

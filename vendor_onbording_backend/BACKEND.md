@@ -1,5 +1,5 @@
 # Backend — Implementation Reference
-> Single source of truth. Phase 1 + OCR pipeline complete.
+> Single source of truth. Phase 1 + OCR pipeline + AI pipeline + Email + Admin dashboard complete.
 > Last updated: May 2026
 
 ---
@@ -33,6 +33,7 @@ A FastAPI server that:
 | PDF OCR | pdfplumber | Extracts embedded text from PDFs (no vision model needed) |
 | Image OCR | pytesseract + Pillow | Extracts text from JPG/PNG via Tesseract 5.x |
 | LLM | Groq API (LLaMA 3.3 70B) | Flag detection + risk reasoning — see AI.md |
+| Email | Resend | Sends user_flags to vendor after AI pipeline completes |
 
 ---
 
@@ -147,6 +148,7 @@ CREATE TABLE reviews (
   risk_score INTEGER,
   decision TEXT,
   risk_reasoning TEXT,
+  email_sent_at TIMESTAMPTZ,
   created_at TIMESTAMP DEFAULT NOW()
 );
 ```
@@ -172,7 +174,8 @@ ALTER TABLE reviews
   ADD COLUMN IF NOT EXISTS notified_factors JSONB,
   ADD COLUMN IF NOT EXISTS risk_score INTEGER,
   ADD COLUMN IF NOT EXISTS decision TEXT,
-  ADD COLUMN IF NOT EXISTS risk_reasoning TEXT;
+  ADD COLUMN IF NOT EXISTS risk_reasoning TEXT,
+  ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ;
 ```
 
 **Storage bucket:** create `vendor-docs` in Supabase Storage → public: OFF.
@@ -182,12 +185,19 @@ Files stored at path: `{vendor_id}/{doc_type}/{filename}`
 
 ## Auth Design
 
+### Vendor JWT
 - No password. No OTP yet (planned Phase 3).
 - Vendor enters email → backend finds or creates vendor row → returns JWT token.
-- Token is signed with `JWT_SECRET` env var using HS256 algorithm.
-- Token expiry: 7 days.
-- Token payload: `{ "vendor_id": "uuid", "email": "..." }`
-- All protected endpoints require: `Authorization: Bearer <token>` header.
+- Token signed with `JWT_SECRET` env var using HS256. Expiry: 7 days.
+- Payload: `{ "vendor_id": "uuid", "email": "..." }`
+- Protected endpoints require: `Authorization: Bearer <token>`
+
+### Admin JWT
+- Admin enters email → backend checks `ADMIN_EMAILS` env var → returns admin JWT.
+- Returns 403 if email not in `ADMIN_EMAILS`.
+- Payload: `{ "email": "...", "role": "admin" }`
+- Admin endpoints verify `payload["role"] == "admin"` — vendor token rejected even with valid signature.
+- Stored separately in frontend as `adminToken` (localStorage) — no overlap with vendor `token`.
 
 ---
 
@@ -467,6 +477,43 @@ Deletes all applications for this vendor. Use case: test runner cleanup.
 
 ---
 
+### `POST /api/admin/login`
+Checks email against `ADMIN_EMAILS`. Returns admin JWT.
+```json
+Request:  { "email": "admin@company.com" }
+Response: { "token": "eyJ..." }
+// 403 if email not in ADMIN_EMAILS
+```
+
+---
+
+### `GET /api/admin/vendors`
+Returns all vendors with their latest application + review row joined.
+- Auth: Admin Bearer token required (role check — vendor token rejected)
+- Returns one object per vendor, sorted by latest submit time
+```json
+Response: [
+  {
+    "vendor_id": "uuid",
+    "email": "vendor@company.com",
+    "company_name": "Acme Ltd",
+    "status": "submitted",
+    "version": 2,
+    "submitted_at": "2026-05-01T...",
+    "risk_score": 42,
+    "decision": "human_review",
+    "risk_reasoning": "...",
+    "user_flags": [...],
+    "risk_factors": [...],
+    "unreadable_docs": [...],
+    "notified_factors": [...],
+    "email_sent_at": "2026-05-01T..."
+  }
+]
+```
+
+---
+
 ## Key Functions in `routers/application.py`
 
 ```python
@@ -491,6 +538,9 @@ def _get_uploaded_doc_types(sb, vendor_id) -> list[str]:
 SUPABASE_URL=https://xxxx.supabase.co
 SUPABASE_SERVICE_KEY=sb_secret_...
 JWT_SECRET=any_long_random_string
+RESEND_API_KEY=re_...
+RESEND_FROM_EMAIL=onboarding@resend.dev   # optional — default is onboarding@resend.dev (Resend shared domain)
+ADMIN_EMAILS=admin@company.com            # comma-separated list of allowed admin emails
 ```
 
 Note: Supabase new UI renamed keys — "Publishable key" = old anon, "Secret key" = old service_role. Use Secret key here.
@@ -513,13 +563,15 @@ vendor_onbording_backend/
 ├── routers/
 │   ├── auth.py              — POST /api/auth/login
 │   ├── documents.py         — POST /upload, GET /, DELETE /all
-│   └── application.py       — POST /submit, POST /draft, GET /status, GET /{id}, DELETE /reset
+│   ├── application.py       — POST /submit, POST /draft, GET /status, GET /{id}, DELETE /reset
+│   └── admin.py             — POST /api/admin/login, GET /api/admin/vendors
 ├── services/
 │   ├── supabase_client.py
 │   ├── jwt_service.py
 │   ├── validation.py
 │   ├── ocr_service.py       — run_ocr_pipeline(app_id, vendor_id) → chains run_ai_pipeline()
 │   ├── ai_service.py        — AI flag detection + risk scoring + reasoning (see AI.md)
+│   ├── email_service.py     — Resend email: sends user_flags to vendor after AI pipeline
 │   └── ocr_extractors/
 │       ├── __init__.py
 │       ├── pdf_extractor.py — pdfplumber extractors for all PDF doc types
@@ -556,6 +608,9 @@ Tesseract required for image OCR: `brew install tesseract`
 | Supabase OR query | `.or_(f"application_id.eq.{draft_id},application_id.is.null")` |
 | OCR IFSC reads O instead of 0 | `RE_IFSC` accepts `[0O]`; `_normalize_ifsc()` corrects letter O at position 4 |
 | `_label_value` with `\|` alternation | Wrap label_pattern in `(?:...)` — bare `\|` in the pattern shifts captured group index |
+| Draft save then re-upload same doc | Draft save links doc to `draft_app_id` (no more NULL row). Re-upload creates a second row (new NULL → linked at submit). Result: two rows for same `doc_type` on same `app_id`. OCR processes both (one extra OCR run — wasteful but harmless). AI picks newer by `uploaded_at`. No data corruption. |
+| OCR-failed doc treated as not_applicable | Fixed May 2026. Old filter `ocr_json is not None` excluded failed docs entirely — AI saw them as "not_applicable" and never told vendor to re-upload. Two-pass dedup now includes failed-status docs. |
+| `partnership_deed` / `dpa` OCR fail invisible | Fixed May 2026. These docs had no exact match fields, so OCR failures were invisible even after the dedup fix. Presence-only checks `dpa_is_signed` and `partnership_firm_name` now surface their OCR status. |
 
 ---
 
@@ -565,13 +620,15 @@ Tesseract required for image OCR: `brew install tesseract`
 
 **OCR Pipeline — COMPLETE:** All 7 PDF doc types + 2 image doc types extract correctly. Runs as background task after clean submit. Results stored in `documents.ocr_json` / `documents.ocr_status`. All-null OCR result → `ocr_status = failed` (not done).
 
-**AI Pipeline — COMPLETE:** See `AI.md` for full details. Flag detection (Groq LLaMA 3.3 70B) + risk scoring (pure code) + reasoning (Groq) all run after OCR. Results stored in `reviews` table.
+**AI Pipeline — COMPLETE (bug fix pass May 2026):** See `AI.md` for full details. Flag detection (Groq LLaMA 3.3 70B) + risk scoring (pure code) + reasoning (Groq) all run after OCR. Results stored in `reviews` table. Bug fixes: OCR-failed docs now correctly surface as `doc_ocr_failed`; `iso_expiry_date` cross-checked; `cancelled_watermark` flagged; `partnership_deed`/`dpa` OCR failures visible.
+
+**Email — COMPLETE:** Resend sends `user_flags` + `unreadable_docs` to vendor after AI pipeline. Fires on any decision except `approved`/`rejected` when flags are non-empty. Idempotent via `email_sent_at` column. See `services/email_service.py`.
+
+**Admin Dashboard — COMPLETE:** `POST /api/admin/login` + `GET /api/admin/vendors`. Admin JWT with role check, separate from vendor auth. Returns all vendors with latest application + review joined. See `routers/admin.py`.
 
 ## What Is NOT Built Yet
 
 | Feature | Notes |
 |---|---|
-| Email notification to vendor after OCR flags | Send `user_flags` to vendor email. Phase 2. |
 | OTP email verification on login | Phase 3 |
-| Admin dashboard | Phase 4 |
 | GET /history — all versions for a vendor | Backlog |

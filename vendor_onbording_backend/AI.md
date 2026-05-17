@@ -1,6 +1,6 @@
 # AI Check Pipeline — Implementation Reference
 > Runs after OCR pipeline completes on every clean submit.
-> Last updated: May 2026
+> Last updated: May 2026 (bug fixes + new checks)
 
 ---
 
@@ -10,6 +10,7 @@ The AI pipeline is the third validation layer that runs after a vendor submits. 
 - Document content doesn't match what the vendor typed in the form
 - Documents are obscured, morphed, or belong to a different entity
 - Risk signals like low insurance coverage, offshore data storage, suspicious employee/turnover ratios
+- Cross-version escalation when vendor ignores flagged issues across resubmissions
 
 ---
 
@@ -66,21 +67,18 @@ VENDOR FILLS FORM + UPLOADS DOCS
 │                                             │
 │  Steps:                                     │
 │  1. Pre-compute exact matches in code       │
-│  2. Flag detection LLM (Ollama/Groq)        │
-│     → user_flags, risk_factors,             │
-│       unreadable_docs                       │
-│  3. Risk scoring in code (pure math)        │
-│     → risk_score, decision,                 │
-│       notified_factors                      │
-│  4. Reasoning LLM (Haiku/Ollama)            │
-│     → risk_reasoning (plain English note)   │
-│  5. Store all in reviews table              │
-│  6. (Future) Email vendor user_flags        │
+│  2. Call Groq LLaMA 3.3 70B                 │
+│  3. LLM judges fuzzy names + risk factors   │
+│     + partial reads                         │
+│  4. Store flags + risk_factors in reviews   │
+│  5. Compute risk score (base + cross-version│
+│     delta); determine decision              │
+│  6. Email vendor if user_flags non-empty    │
 │                                             │
 │  ai_status values:                          │
 │  not_started → processing → done/failed     │
 │                                             │
-│  Result: reviews row fully populated        │
+│  Result: reviews row with score + decision  │
 └─────────────────────────────────────────────┘
 ```
 
@@ -92,31 +90,19 @@ VENDOR FILLS FORM + UPLOADS DOCS
 |---|---|---|
 | Rule-based | Wrong format, missing fields, missing docs | Doc content vs form mismatch |
 | OCR | Extracts what's actually in the document | Whether it matches the form |
-| AI | Mismatches, fuzzy names, risk signals, partial reads | Already caught by layers 1-2 |
+| AI | Mismatches, fuzzy names, risk signals, partial reads, cross-version escalation | Already caught by layers 1-2 |
 
 **Key insight:** Layer 1 trusts the vendor's input. Layer 3 verifies it against the actual documents.
-
-Example: Vendor types `gst_number = 27AABCT1234M1Z5` (Maharashtra, valid format). Layer 1 passes it. But if the uploaded GST certificate has a different PAN embedded — layers 1 and 2 miss this. Layer 3 catches it via `ocr_gstin_pan_matches_form_pan`.
 
 ---
 
 ## Model
 
-**Active: Groq API — LLaMA 3.3 70B Versatile**
+**Groq API — LLaMA 3.3 70B Versatile**
 - Fast inference (~300 tokens/sec on Groq)
 - Cheap ($0.59/1M input tokens)
-- Flag detection uses `response_format: json_object` (structured JSON)
-- Reasoning uses plain text (temperature 0.3)
+- Structured JSON output via `response_format: json_object`
 - Env var: `GROQ_API_KEY`
-- Free tier: 100K tokens/day (~40 calls/day at current prompt size)
-- Both `_call_llm` and `_call_reasoning_llm` use Groq
-
-**Fallback: Ollama local — llama3.1:8b (commented out in code)**
-- Runs on `http://localhost:11434`
-- No rate limits, free, instant switch
-- Quality noticeably worse — misses conditional rules, hallucinates more
-- Use only for structural/flow testing, not prompt quality validation
-- Switch in `services/ai_service.py` — comment/uncomment two blocks in `_call_llm` and `_call_reasoning_llm`
 
 ---
 
@@ -130,12 +116,19 @@ CREATE TABLE reviews (
   user_flags JSONB,
   risk_factors JSONB,
   unreadable_docs JSONB,
+  notified_factors JSONB,
   ai_status TEXT DEFAULT 'not_started',
+  risk_score INTEGER,
+  decision TEXT,
+  risk_reasoning TEXT,
+  email_sent_at TIMESTAMPTZ,
   created_at TIMESTAMP DEFAULT NOW()
 );
 ```
 
 `UNIQUE` on `application_id` — one review per submission. Retry on failure updates existing row, no duplicate.
+
+`email_sent_at` — set atomically before sending email. Prevents double-send if pipeline is triggered twice.
 
 **ai_status lifecycle:** `not_started → processing → done / failed`
 
@@ -148,39 +141,45 @@ run_ai_pipeline(app_id, vendor_id)
     │
     ├─ upsert reviews row: ai_status = 'processing'
     │
-    ├─ fetch application row (all 31 form fields)
+    ├─ fetch application row (all 36 form fields)
     │
-    ├─ fetch latest doc per doc_type across ALL vendor versions (not just current app_id)
-    │    → SELECT doc_type, ocr_json, ocr_status ORDER BY uploaded_at DESC, dedupe by doc_type
-    │    → if vendor re-uploaded doc in v2 → picks v2 (newer). if not re-uploaded → picks v1.
-    │    → only includes docs where ocr_json IS NOT NULL (OCR has run)
+    ├─ fetch latest doc per doc_type across ALL vendor versions
+    │    → query all vendor docs ORDER BY uploaded_at DESC
+    │    → two-pass dedupe by doc_type in Python:
+    │       Pass 1: pick newest doc with ocr_json != null (successful OCR)
+    │       Pass 2: for doc_types with no successful OCR, pick newest doc with ocr_status="failed"
+    │    → ensures OCR-failed docs enter ocr_summary as {status: "failed"} — not silently skipped
+    │    → if vendor re-uploaded in v2 → picks v2; else falls back to v1
     │
-    ├─ _build_ocr_summary()
+    ├─ build OCR summary
     │    → flat dict: { doc_type: { status, ...extracted_fields } }
     │    → strips raw_text to keep prompt small
     │
-    ├─ _compute_exact_matches()
+    ├─ compute exact matches
     │    → returns flat dict of true/false/"partial"/null per check
     │    → see "Exact Matches" section below
     │
-    ├─ _call_llm(form, ocr_summary, exact_matches)
-    │    → _compute_exact_match_context() converts raw values → labeled strings
-    │    → _compute_company_age_years() pre-computes age, removes incorporation_date
-    │    → sends { today, form, ocr, exact_match_context } to flag detection LLM
-    │    → temperature=0.1 (Groq) / 0.0 (Ollama)
+    ├─ call flag detection LLM (Groq LLaMA 3.3 70B)
+    │    → converts raw match values → plain-English context labels
+    │    → pre-computes company_age_years, removes incorporation_date
+    │    → sends { today, form, ocr, exact_match_context } to Groq
+    │    → temperature=0.1, response_format=json_object
     │    → returns user_flags, risk_factors, unreadable_docs
     │
     ├─ upsert reviews row: ai_status = 'done'
     │    user_flags, risk_factors, unreadable_docs stored
     │
-    └─ compute_risk_score_and_store()
-         ├─ _compute_notified_factors() → which risk_factors had a user_flag
-         ├─ _base_score() → weighted sum of current risk_factors (capped 100)
-         ├─ fetch prior reviews for this vendor (with their notified_factors)
-         ├─ _cross_version_delta() → decay-weighted escalation/resolution
-         ├─ _decision() → approved/waiting_for_response/human_review/high_risk_review/rejected
-         ├─ _call_reasoning_llm() → plain English note for reviewer (Haiku/Ollama)
-         └─ upsert reviews row: risk_score, decision, notified_factors, risk_reasoning
+    ├─ compute risk score + store
+    │    → base score: weighted sum of risk_factors (high=10, med=5, low=2, cap 100)
+    │    → cross-version delta: decay-weighted escalation/resolution from prior versions
+    │    → decision: approved / waiting_for_response / human_review / high_risk_review / rejected
+    │    → call reasoning LLM (Groq) → plain English reviewer note
+    │    → store risk_score, decision, notified_factors, risk_reasoning
+    │    → if rejected → set applications.status = rejected
+    │
+    └─ send vendor email (Resend)
+         → only if user_flags non-empty AND decision != rejected
+         → atomic email_sent_at claim prevents double-send on retry
 ```
 
 On any exception → `ai_status = 'failed'`, error stored in `risk_factors`.
@@ -204,77 +203,76 @@ On any exception → `ai_status = 'failed'`, error stored in `risk_factors`.
 
 ## Exact Match Context Labels (What LLM Sees)
 
-`_compute_exact_match_context()` converts raw values → plain-English strings. This is what the LLM receives in `exact_match_context`. Purpose: LLM was hallucinating on raw null/true/false — labeled strings tell it exactly WHY and what to do.
+`_compute_exact_match_context()` converts raw values → plain-English strings. LLM receives these in `exact_match_context`.
 
 | Label | When | LLM Action |
 |---|---|---|
 | `"verified"` | value = true | Skip. No flag. |
-| `"mismatch — value extracted from {doc_type} does not match form"` | value = false | `user_flags` high severity |
-| `"partial_read — {doc_type} OCR succeeded but this field is null; possible obscured or edited document"` | value = "partial" | `user_flags` medium + `risk_factors` medium |
-| `"doc_ocr_failed — {doc_type} could not be read at all"` | value = null + doc failed | `unreadable_docs` + `risk_factors` low |
-| `"not_applicable — {doc_type} was not required for this vendor"` | value = null + doc not in ocr | Skip entirely. No flag, no risk factor. |
+| `"mismatch — ..."` | value = false | `user_flags` high + `risk_factors` high (`<field>_mismatch`) |
+| `"partial_read — ..."` | value = "partial" | `user_flags` medium + `risk_factors` medium |
+| `"doc_ocr_failed — ..."` | value = null + doc failed | `unreadable_docs` + `user_flags` medium (one per doc) + `risk_factors` low |
+| `"not_applicable — ..."` | value = null + doc not in ocr | Skip entirely. No flag, no risk factor. |
 
 **Key rule:** `not_applicable` overrides everything — even if `form.iso_expiry_date` is in the past, if `iso_cert_number` is `not_applicable`, no ISO flags are fired.
+
+**Mismatch → both user_flag and risk_factor:** Every exact mismatch means the doc shows a different value than what the vendor declared. This is both a vendor action item (fix the doc) and a risk signal (scored and tracked across versions). `incorporation_date` mismatch is medium severity because date format differences are common.
 
 ---
 
 ## Exact Matches (Pre-Computed in Code)
 
-All computed in `_compute_exact_matches()`. Results sent to LLM — LLM generates the message, not the code.
+All computed in `_compute_exact_matches()`.
 
 ### Form Field vs OCR Extracted Value
 
-| Key | Form Field | OCR Field | Doc |
+| Key | Form Field | OCR Field | Doc | Severity if Mismatch |
+|---|---|---|---|---|
+| `pan_number` | `pan_number` | `pan_number` | pan_card | high |
+| `ifsc_code` | `ifsc_code` | `ifsc_code` | cancelled_cheque | high |
+| `account_number` | `account_number` | `account_number` | cancelled_cheque | high |
+| `gst_number` | `gst_number` | `gstin` | gst_cert | high |
+| `cin_number` | `cin_number` | `cin_number` | incorporation | high |
+| `incorporation_date` | `incorporation_date` | `incorporation_date` | incorporation | medium |
+| `llp_number` | `llp_number` | `llp_number` | llp_agreement | high |
+| `msme_number` | `msme_number` | `udyam_number` | msme_cert | high |
+| `iso_cert_number` | `iso_cert_number` | `cert_number` | iso_cert | high |
+| `iso_expiry_date` | `iso_expiry_date` | `expiry_date` | iso_cert | medium |
+
+`iso_expiry_date` comparison normalizes formats (YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY) before comparing.
+
+### Presence-Only Checks (OCR Status Tracking — No Form Comparison)
+
+These keys exist in `exact_match_context` solely to surface OCR status for docs that have no numeric/date field to compare against. The LLM uses them only to detect `partial_read` and `doc_ocr_failed` — actual field value checks are done directly from `ocr` by the LLM.
+
+| Key | Doc | Representative Field | Purpose |
 |---|---|---|---|
-| `pan_number` | `pan_number` | `pan_number` | pan_card |
-| `ifsc_code` | `ifsc_code` | `ifsc_code` | cancelled_cheque |
-| `account_number` | `account_number` | `account_number` | cancelled_cheque |
-| `gst_number` | `gst_number` | `gstin` | gst_cert |
-| `cin_number` | `cin_number` | `cin_number` | incorporation |
-| `llp_number` | `llp_number` | `llp_number` | llp_agreement |
-| `msme_number` | `msme_number` | `udyam_number` | msme_cert |
-| `iso_cert_number` | `iso_cert_number` | `cert_number` | iso_cert |
+| `dpa_is_signed` | dpa | `is_signed` | Get DPA OCR status into context; LLM checks `ocr.dpa.is_signed` directly |
+| `partnership_firm_name` | partnership_deed | `firm_name` | Get partnership_deed OCR status into context; LLM does fuzzy name check from `ocr` |
+
+**Return values:** `True` = field present (any value); `"partial"` = doc done but field missing; `None` = doc failed or not uploaded. Never returns `False` — no form comparison.
+
+`incorporation_date` comparison normalizes formats (YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY) before comparing.
 
 ### OCR Cross-Checks (Derived from Doc Content)
 
-Rule-based at submit checks vendor-typed fields only. These check the actual document content against form fields — catches wrong entity's document uploaded.
 
-| Key | Logic | What It Catches |
-|---|---|---|
-| `ocr_gstin_state_matches_form_state` | GST cert chars[0:2] vs `STATE_GST_CODES[form.state]` | Wrong state's GST cert uploaded |
-| `ocr_gstin_pan_matches_form_pan` | GST cert chars[2:12] vs form `pan_number` | GST cert belongs to different entity |
-| `ocr_pan_4th_char_matches_company_type` | PAN card char[3] vs allowed chars for `company_type` | PAN card is for wrong entity type |
+These check doc content against form fields — catches wrong entity's document uploaded.
+
+| Key | Logic | What It Catches | Severity if Mismatch |
+|---|---|---|---|
+| `ocr_gstin_state_matches_form_state` | GST cert chars[0:2] vs `STATE_GST_CODES[form.state]` | Wrong state's GST cert | high |
+| `ocr_gstin_pan_matches_form_pan` | GST cert chars[2:12] vs form `pan_number` | GST cert for different entity | high |
+| `ocr_pan_4th_char_matches_company_type` | PAN card char[3] vs allowed chars for `company_type` | PAN for wrong entity type | high |
 
 ---
 
 ## What LLM Receives
 
-`incorporation_date` is removed from form. Replaced with `company_age_years` (pre-computed int).
-
-Raw `exact_matches` (true/false/"partial"/null) are NOT sent to LLM. They are converted to `exact_match_context` — plain-English labeled strings that explain WHY each value is what it is. See "Exact Match Context Labels" section below.
-
-`today` (ISO date string) is added to user content so LLM can evaluate date comparisons like iso_expiry_date in the past.
+`incorporation_date` is removed from form before LLM call. Replaced with `company_age_years` (pre-computed int). Raw `exact_matches` are converted to `exact_match_context` labeled strings.
 
 ```json
 {
-  "today": "2026-05-17",
-  "form": {
-    "company_name": "Test Corp Private Limited",
-    "company_type": "Private Limited",
-    "pan_number": "AABCT1234M",
-    "state": "Maharashtra",
-    "annual_turnover": "1-10 Cr",
-    "employee_count": 450,
-    "iso_certified": true,
-    "iso_expiry_date": "2024-03-01",
-    "processes_data": true,
-    "soc2_audited": false,
-    "data_in_india": false,
-    "cyber_insurance": true,
-    "cyber_coverage_crores": 1.0,
-    "company_age_years": 2,
-    "...all fields except incorporation_date..."
-  },
+  "form": { "...all fields except incorporation_date...", "company_age_years": 2 },
   "ocr": {
     "pan_card":         { "status": "done", "pan_number": "AABCT1234M", "name_on_card": "TEST CORP PVT LTD" },
     "cancelled_cheque": { "status": "done", "ifsc_code": "HDFC0001234", "account_number": "003601234567", "account_holder_name": "Test Corp" },
@@ -283,17 +281,18 @@ Raw `exact_matches` (true/false/"partial"/null) are NOT sent to LLM. They are co
     "dpa":              { "status": "done", "is_signed": false }
   },
   "exact_match_context": {
-    "pan_number":      "verified",
-    "ifsc_code":       "verified",
-    "account_number":  "verified",
-    "gst_number":      "verified",
-    "cin_number":      "doc_ocr_failed — incorporation could not be read at all",
-    "llp_number":      "not_applicable — llp_agreement was not required for this vendor",
-    "msme_number":     "not_applicable — msme_cert was not required for this vendor",
-    "iso_cert_number": "partial_read — iso_cert OCR succeeded but this field is null; possible obscured or edited document",
+    "pan_number":         "verified",
+    "ifsc_code":          "verified",
+    "account_number":     "verified",
+    "gst_number":         "verified",
+    "cin_number":         "doc_ocr_failed — incorporation could not be read at all",
+    "incorporation_date": "doc_ocr_failed — incorporation could not be read at all",
+    "llp_number":         "not_applicable — llp_agreement was not required for this vendor",
+    "msme_number":        "not_applicable — msme_cert was not required for this vendor",
+    "iso_cert_number":    "partial_read — iso_cert OCR succeeded but this field is null",
     "ocr_gstin_state_matches_form_state":   "verified",
-    "ocr_gstin_pan_matches_form_pan":        "verified",
-    "ocr_pan_4th_char_matches_company_type": "verified"
+    "ocr_gstin_pan_matches_form_pan":       "verified",
+    "ocr_pan_4th_char_matches_company_type":"verified"
   }
 }
 ```
@@ -302,177 +301,200 @@ Raw `exact_matches` (true/false/"partial"/null) are NOT sent to LLM. They are co
 
 ## LLM Output Schema
 
-The system prompt gives LLM the exact output format to follow. All three keys must always be present even if empty array. No extra keys allowed.
-
 ```json
 {
   "user_flags": [
-    {
-      "field": "<form field name or doc_type this flag relates to>",
-      "severity": "<exactly one of: high, medium, low>",
-      "message": "<clear message written to the vendor explaining what to fix>"
-    }
+    { "field": "<form field or doc identifier>", "severity": "high|medium|low", "message": "<message to vendor>" }
   ],
   "risk_factors": [
-    {
-      "factor": "<short snake_case identifier e.g. iso_cert_expired, data_offshore>",
-      "severity": "<exactly one of: high, medium, low>",
-      "note": "<internal note for reviewer — NOT shown to vendor>"
-    }
+    { "factor": "<snake_case identifier>", "severity": "high|medium|low", "note": "<internal reviewer note>" }
   ],
   "unreadable_docs": [
-    {
-      "doc_type": "<doc_type exactly as received e.g. pan_card, gst_cert>",
-      "message": "<message written to the vendor asking to re-upload>"
-    }
+    { "doc_type": "<doc_type>", "message": "<message to vendor>" }
   ]
 }
 ```
-
-**Example output:**
-```json
-{
-  "user_flags": [
-    {
-      "field": "dpa",
-      "severity": "high",
-      "message": "Data Processing Agreement is not signed. Please upload a signed copy."
-    },
-    {
-      "field": "iso_cert",
-      "severity": "high",
-      "message": "ISO certificate expired on 2024-03-01. Please upload the renewed certificate."
-    },
-    {
-      "field": "iso_cert_number",
-      "severity": "medium",
-      "message": "ISO certificate could not be fully read — certificate number field is missing. Please re-upload a clear, unedited copy."
-    }
-  ],
-  "risk_factors": [
-    {
-      "factor": "iso_cert_expired",
-      "severity": "high",
-      "note": "ISO certificate expired March 2024. Vendor processes data but has no valid ISO cert."
-    },
-    {
-      "factor": "partial_ocr_iso_cert",
-      "severity": "medium",
-      "note": "ISO certificate OCR read partially — cert_number field missing. Possible obscured or edited document."
-    },
-    {
-      "factor": "data_offshore",
-      "severity": "high",
-      "note": "data_in_india=false. Vendor stores data outside India — RBI compliance risk."
-    },
-    {
-      "factor": "processes_data_no_soc2",
-      "severity": "medium",
-      "note": "Vendor processes data but is not SOC2 audited."
-    },
-    {
-      "factor": "employee_turnover_mismatch",
-      "severity": "high",
-      "note": "450 employees with 1-10 Cr turnover is inconsistent. Possible misrepresentation."
-    },
-    {
-      "factor": "low_cyber_coverage",
-      "severity": "medium",
-      "note": "Cyber coverage of ₹1Cr is low for a data processor with 1-10 Cr turnover."
-    },
-    {
-      "factor": "new_company",
-      "severity": "low",
-      "note": "Company incorporated June 2023 — less than 2 years old."
-    }
-  ],
-  "unreadable_docs": [
-    {
-      "doc_type": "incorporation",
-      "message": "Certificate of incorporation could not be read. Please re-upload a clear, unedited copy."
-    }
-  ]
-}
-```
-
-### Output Constraints (enforced via system prompt)
-
-| Constraint | Detail |
-|---|---|
-| All 3 keys always present | Even if no flags found — use empty array `[]` |
-| `severity` values | Exactly one of: `high`, `medium`, `low` — no other strings |
-| `factor` format | `snake_case` short identifier — e.g. `iso_cert_expired`, `data_offshore` |
-| `partial` factor naming | Always `partial_ocr_<doc_type>` — e.g. `partial_ocr_gst_cert` |
-| `doc_type` in unreadable_docs | Must match exact doc_type string from input — e.g. `pan_card`, `gst_cert` |
-| No text outside JSON | System prompt explicitly says no markdown, no explanation, no ```json blocks |
-
-### Severity Guide
-
-| Severity | Meaning |
-|---|---|
-| `high` | Serious mismatch, compliance gap, or fraud signal |
-| `medium` | Notable concern for reviewer |
-| `low` | Informational, minor signal |
-
-### Backend Impact of Output Format
-
-None. `_call_llm()` does `json.loads(raw)` and stores all three keys as JSONB in `reviews` table. JSONB accepts any valid JSON — no DB schema change needed. No endpoint currently reads from `reviews` so format changes are fully contained in the prompt.
 
 ---
 
-## All Checks the LLM Performs
+## All Possible Risk Factors
 
-### User Flags (shown to vendor)
+Every risk factor has a fixed severity range. LLM chooses within range for fuzzy name checks; all others are fixed.
 
-| Check | Type | Trigger |
+### Exact Mismatch Risk Factors (all fixed high, except dates)
+
+| Risk | Plain English | Severity | Escalates Cross-Version |
+|---|---|---|---|
+| `pan_number_mismatch` | PAN number on card doesn't match form | high | yes |
+| `ifsc_code_mismatch` | IFSC code on cheque doesn't match form | high | yes |
+| `account_number_mismatch` | Account number on cheque doesn't match form | high | yes |
+| `gst_number_mismatch` | GSTIN on GST certificate doesn't match form | high | yes |
+| `cin_number_mismatch` | CIN on incorporation cert doesn't match form | high | yes |
+| `incorporation_date_mismatch` | Incorporation date on cert doesn't match form | medium | yes |
+| `llp_number_mismatch` | LLP number on agreement doesn't match form | high | yes |
+| `msme_number_mismatch` | MSME/Udyam number on cert doesn't match form | high | yes |
+| `iso_cert_number_mismatch` | ISO certificate number on cert doesn't match form | high | yes |
+| `iso_expiry_date_mismatch` | ISO expiry date on cert doesn't match form | medium | yes |
+
+### OCR Cross-Check Mismatch Risk Factors
+
+| Risk | Plain English | Severity | Escalates Cross-Version |
+|---|---|---|---|
+| `gst_cert_state_mismatch` | State code in GST cert doesn't match vendor's declared state | high | yes |
+| `gst_cert_entity_mismatch` | PAN embedded inside GST cert doesn't match vendor's PAN | high | yes |
+| `pan_entity_type_mismatch` | PAN card entity type character doesn't match declared company type | high | yes |
+
+### Partial OCR Risk Factors (field missing inside readable doc)
+
+| Risk | Plain English | Severity | Escalates Cross-Version |
+|---|---|---|---|
+| `partial_ocr_pan_card` | PAN card was read but PAN number field is missing | medium | yes |
+| `partial_ocr_cancelled_cheque` | Cancelled cheque was read but key field is missing | medium | yes |
+| `partial_ocr_gst_cert` | GST certificate was read but GSTIN field is missing | medium | yes |
+| `partial_ocr_incorporation` | Incorporation cert was read but key field is missing | medium | yes |
+| `partial_ocr_llp_agreement` | LLP agreement was read but LLP number is missing | medium | yes |
+| `partial_ocr_msme_cert` | MSME cert was read but Udyam number is missing | medium | yes |
+| `partial_ocr_iso_cert` | ISO cert was read but certificate number is missing | medium | yes |
+| `partial_ocr_dpa` | DPA was read but is_signed field is missing | medium | yes |
+| `partial_ocr_partnership_deed` | Partnership deed was read but firm_name field is missing | medium | yes |
+
+### OCR Failed Risk Factors (whole doc unreadable)
+
+| Risk | Plain English | Severity | Escalates Cross-Version |
+|---|---|---|---|
+| `ocr_failed_pan_card` | PAN card could not be read at all | low | yes (via user_flags + unreadable_docs) |
+| `ocr_failed_cancelled_cheque` | Cancelled cheque could not be read at all | low | yes (via user_flags + unreadable_docs) |
+| `ocr_failed_gst_cert` | GST certificate could not be read at all | low | yes (via user_flags + unreadable_docs) |
+| `ocr_failed_incorporation` | Incorporation cert could not be read at all | low | yes (via user_flags + unreadable_docs) |
+| `ocr_failed_llp_agreement` | LLP agreement could not be read at all | low | yes (via user_flags + unreadable_docs) |
+| `ocr_failed_msme_cert` | MSME certificate could not be read at all | low | yes (via user_flags + unreadable_docs) |
+| `ocr_failed_iso_cert` | ISO certificate could not be read at all | low | yes (via user_flags + unreadable_docs) |
+| `ocr_failed_dpa` | Data Processing Agreement could not be read at all | low | yes (via user_flags + unreadable_docs) |
+| `ocr_failed_partnership_deed` | Partnership deed could not be read at all | low | yes (via user_flags + unreadable_docs) |
+
+### Fuzzy Name Mismatch Risk Factors (LLM judges severity)
+
+LLM compares extracted name from each doc against `form.company_name`:
+- **no_issue** → same entity (abbreviations, "Pvt Ltd" = "Private Limited") → skip entirely
+- **low** → minor variation (word order, initials) → risk_factor only, no user_flag, no cross-version escalation
+- **medium** → different but possibly related name (trading name, subsidiary) → both user_flag + risk_factor
+- **high** → completely different entity → both user_flag + risk_factor
+
+| Risk | Doc Checked | Severity Range | Escalates Cross-Version |
+|---|---|---|---|
+| `pan_name_mismatch` | Name on PAN card vs company name | low/medium/high | medium/high only |
+| `account_holder_name_mismatch` | Account holder on cancelled cheque vs company name | low/medium/high | medium/high only |
+| `gst_legal_name_mismatch` | Legal name on GST cert vs company name | low/medium/high | medium/high only |
+| `incorporation_name_mismatch` | Company name on incorporation cert vs company name | low/medium/high | medium/high only |
+| `llp_name_mismatch` | LLP name on agreement vs company name | low/medium/high | medium/high only |
+| `iso_name_mismatch` | Company name on ISO cert vs company name | low/medium/high | medium/high only |
+| `msme_name_mismatch` | Enterprise name on MSME cert vs company name | low/medium/high | medium/high only |
+| `partnership_name_mismatch` | Firm name on partnership deed vs company name | low/medium/high | medium/high only |
+
+### Document Validity Risk Factors
+
+| Risk | Plain English | Severity | Escalates Cross-Version |
+|---|---|---|---|
+| `dpa_not_signed` | DPA was uploaded and read but is_signed = false | medium | yes |
+| `cancelled_cheque_no_watermark` | Cancelled cheque does not have a "CANCELLED" watermark | low | yes |
+
+### Compliance & Business Risk Factors (form fields only, internal)
+
+These never create user_flags and never escalate cross-version — vendor cannot fix them by resubmitting.
+
+| Risk | Plain English | Severity |
 |---|---|---|
-| PAN number mismatch | Exact → false | pan_number key |
-| IFSC mismatch | Exact → false | ifsc_code key |
-| Account number mismatch | Exact → false | account_number key |
-| GST number mismatch | Exact → false | gst_number key |
-| CIN number mismatch | Exact → false | cin_number key |
-| LLP number mismatch | Exact → false | llp_number key |
-| MSME number mismatch | Exact → false | msme_number key |
-| ISO cert number mismatch | Exact → false | iso_cert_number key |
-| Wrong entity GST cert (state) | Cross-check → false | ocr_gstin_state_matches_form_state |
-| Wrong entity GST cert (PAN) | Cross-check → false | ocr_gstin_pan_matches_form_pan |
-| Wrong PAN entity type | Cross-check → false | ocr_pan_4th_char_matches_company_type |
-| Name on PAN card vs company_name | Fuzzy → LLM judges | ocr.pan_card.name_on_card vs form.company_name |
-| Account holder vs company_name | Fuzzy → LLM judges | ocr.cancelled_cheque.account_holder_name vs form.account_holder_name |
-| Company name on GST cert | Fuzzy → LLM judges | ocr.gst_cert.legal_name vs form.company_name |
-| Company name suffix vs type | LLM judges | "Pvt Ltd" in name but type = LLP |
-| DPA not signed | Direct OCR field | ocr.dpa.is_signed = false |
-| ISO cert expired | Date comparison | form.iso_expiry_date < today |
-| Partial read on any doc | partial value | Any exact_matches key = "partial" |
-| Whole doc unreadable | null value (failed) | Any exact_matches key = null + doc ocr_status = failed |
-
-### Risk Factors (internal, reviewer only)
-
-| Factor | Signal |
-|---|---|
-| ISO cert expired | Vendor must renew; did they fix it in next version? |
-| Partial OCR on any doc | Possible obscured or morphed document |
-| `data_in_india = false` | RBI compliance risk |
-| `processes_data = true` + `soc2_audited = false` | Security gap |
-| `processes_data = true` + `iso_certified = false` | Security gap |
-| Employee count vs turnover mismatch | Possible misrepresentation |
-| Low cyber coverage relative to turnover | Underinsured for data processor |
-| Company < 2 years old | New entity, limited track record |
-| Service nature vs turnover implausible | "Core Banking Software" + `<1 Cr` = suspicious |
-| Account holder name partial fuzzy match | Borderline name similarity |
-| AI pipeline itself failed | Stored as risk_factor so reviewer knows check didn't run |
+| `iso_cert_expired` | ISO certificate expiry date is in the past | high |
+| `data_offshore` | Vendor declared data is stored outside India | high |
+| `employee_turnover_mismatch` | Employee count is implausible relative to declared turnover | high |
+| `processes_data_no_soc2` | Vendor processes data but is not SOC2 audited | medium |
+| `processes_data_no_iso` | Vendor processes data but is not ISO certified | medium |
+| `low_cyber_coverage` | Vendor processes data but cyber insurance coverage is low for their turnover | medium |
+| `service_turnover_mismatch` | Service nature is implausible relative to declared turnover | medium |
+| `new_company` | Company is less than 2 years old | low |
+| `ai_check_failed` | AI pipeline itself threw an error — check did not run | low |
 
 ---
 
-## Partial Read Handling
+## Fuzzy Name Check Design
 
-When `exact_matches` key = `"partial"` (doc OCR succeeded but specific field is null):
+LLM receives all extracted name fields in `ocr` and compares each against `form.company_name`:
 
-**LLM does two things:**
-1. `user_flags` — "Document uploaded for {doc_type} could not be fully read. Please re-upload a clear, unedited copy."
-2. `risk_factors` — "Partial OCR on {doc_type} — {field} missing. Possible obscured, damaged, or edited document."
+| Doc | OCR Field | Factor Name | OCR fail detection |
+|---|---|---|---|
+| pan_card | `name_on_card` | `pan_name_mismatch` | via `pan_number` exact match |
+| cancelled_cheque | `account_holder_name` | `account_holder_name_mismatch` | via `ifsc_code`/`account_number` exact match |
+| gst_cert | `legal_name` | `gst_legal_name_mismatch` | via `gst_number` exact match |
+| incorporation | `company_name` | `incorporation_name_mismatch` | via `cin_number` exact match |
+| llp_agreement | `company_name` | `llp_name_mismatch` | via `llp_number` exact match |
+| iso_cert | `company_name` | `iso_name_mismatch` | via `iso_cert_number` exact match |
+| msme_cert | `enterprise_name` | `msme_name_mismatch` | via `msme_number` exact match |
+| partnership_deed | `firm_name` | `partnership_name_mismatch` | via `partnership_firm_name` presence check |
+| dpa | `is_signed` (value check) | `dpa_not_signed` | via `dpa_is_signed` presence check |
 
-**Why both:** Vendor may have uploaded legitimately poor quality scan (user flag fixes it). But partial reads are also a fraud vector — someone editing a document to remove a specific value. Reviewer needs to know regardless of whether vendor re-uploads.
+**Why presence-only checks for `partnership_deed` and `dpa`:** These docs have no numeric/date field to cross-compare against the form. Without a presence-only entry in `exact_match_context`, a failed OCR on them would be invisible to the pipeline — they'd appear as "not_applicable" instead of "doc_ocr_failed". The presence checks fix this: they bring OCR status into context so the LLM can add them to `unreadable_docs` when needed.
+
+---
+
+## Risk Scoring
+
+### Base Score
+
+```
+base_score = Σ(severity_weight for each risk_factor)
+  high   = 10 points
+  medium = 5 points
+  low    = 2 points
+  cap    = 100
+```
+
+### Cross-Version Delta
+
+Tracks whether vendor acted on issues they were notified about.
+
+**Notified factors** = risk_factors whose corresponding user_flag field was in this version's `user_flags`. For `ocr_failed_*` factors — vendor is notified via both `user_flags` (medium severity) and `unreadable_docs`; both paths are counted.
+
+```
+For each prior version (oldest to newest):
+  weight = 0.5 ^ (distance - 1)   # most recent prior = distance 1 = weight 1.0
+
+  repeated notified factor → +5 × weight   (vendor was told, didn't fix)
+  resolved notified factor → -3 × weight   (vendor fixed it)
+
+delta = round(Σ all version contributions)
+final_score = clamp(base_score + delta, 0, 100)
+```
+
+### Decision Thresholds
+
+| Score | Decision | Meaning |
+|---|---|---|
+| 0–5 | `approved` | Clean or trivial signals only |
+| 6–50 | `waiting_for_response` (if user_flags present) or `human_review` | Minor issues sent to vendor |
+| 51–75 | `human_review` | Reviewer must assess manually |
+| 76–89 | `high_risk_review` | Serious risk — reviewer escalation |
+| ≥ 90 | `rejected` | Auto-rejected — too many unresolved high-risk signals |
+
+**Note:** Thresholds are under review — with many more risk factors now contributing to score, calibration may need adjustment.
+
+---
+
+## OCR Failure and Partial Read Handling
+
+**OCR failed** (whole doc unreadable, `ocr_status = "failed"`):
+
+1. `unreadable_docs` — doc_type + message asking vendor to re-upload
+2. `user_flags` — one entry per doc, field=doc_type, severity:medium (vendor explicitly flagged)
+3. `risk_factors` — `ocr_failed_<doc_type>` severity:low
+
+All three fire. Vendor is emailed and sees the flag. Risk factor is low because unreadable docs are common with poor scan quality — not inherently suspicious.
+
+**Partial read** (doc OCR done but specific field null):
+
+1. `user_flags` — vendor asked to re-upload clear unedited copy (medium severity)
+2. `risk_factors` — `partial_ocr_<doc_type>` (medium severity) — internal fraud signal
+
+Both fire. Vendor may have uploaded legitimately poor quality scan. But partial reads are also a fraud vector — someone editing a doc to remove a specific field. Reviewer sees this regardless of whether vendor re-uploads. Medium severity (higher than failed) because a doc that reads partially is more suspicious than one that's completely unreadable.
 
 ---
 
@@ -502,219 +524,70 @@ GROQ_API_KEY=gsk_...
 ### Why context labels instead of raw values
 Initial approach sent `exact_matches: { "pan_number": true, "cin_number": null }` to LLM. LLM couldn't tell whether `null` meant doc failed or doc not applicable — hallucinated flags for not-uploaded docs. Switched to `exact_match_context` with labeled strings. LLM now knows exactly WHY each value is what it is.
 
-### Why few-shot examples (10 total)
-LLM without examples missed subtle patterns:
-- Fuzzy name mismatch (Rajesh Kumar Mehta vs Silverline IT Solutions) — needed example 6
-- not_applicable being skipped — needed examples 5, 7, 8, 9
-- Deduplication of risk factors for same doc — needed example 10
+### Why mismatch generates both user_flag AND risk_factor
+Early design only created user_flags for exact mismatches. This meant a vendor repeatedly submitting wrong PAN had score 0 — no escalation possible. Every mismatch is both a vendor action item (fix it) and a risk signal (score it, track it). User flags are a subset of risk. Not scoring them broke cross-version escalation entirely.
 
-### Bug fixes applied to system prompt (v2)
-1. **processes_data false-positive**: LLM fired `processes_data_no_soc2`/`no_iso` even when `processes_data=false`. Fix: added explicit IMPORTANT block — "ONLY fire if form.processes_data IS EXACTLY true". Added example 9.
-2. **Duplicate risk factors**: LLM created two risk factors for same doc (e.g. `partial_ocr_incorporation` + `ocr_failed_incorporation`). Fix: added deduplication rule — "at most ONE risk factor per doc_type". Added example 10.
-3. **not_applicable hallucination**: LLM saw `form.iso_expiry_date` in past and fired ISO flags even when `iso_cert_number` = `not_applicable`. Fix: added explicit override rule — "not_applicable overrides form fields". Added examples 8 and 9.
+### Why fuzzy names use low/medium/high instead of a binary flag
+Abbreviations ("Pvt Ltd" vs "Private Limited") are common and not suspicious. But "Rajesh Kumar Mehta" on a company bank cheque is high severity. LLM is the right tool for this judgment call — code cannot reasonably detect this spectrum. Low severity fires risk_factor only (internal signal) without notifying vendor. Medium/high notifies vendor and escalates cross-version.
 
-### Bug fixes applied to system prompt (v3)
-4. **company_age_years=null in test runner**: `_call_llm` was overwriting pre-computed `company_age_years` from test input with None when `incorporation_date` was already stripped. Fix: only compute if `company_age_years` not already in form dict.
-5. **Invented risk factors (data_offshore when data_in_india=true)**: LLM invented risk factor names not in the allowed list. Fix: added "ONLY create risk_factors for conditions explicitly listed" + explicit guard on `data_in_india` condition + example 11.
-6. **iso_cert_expired missing from user_flags**: LLM had no `today` date in prompt so couldn't evaluate "in the past". Fix: added `today` field to user content JSON. Also clarified rule must fire BOTH user_flag + risk_factor. Added example 12.
-7. **Duplicate user_flags for same field (gst_number)**: Both `gst_number` mismatch and `ocr_gstin_pan_matches_form_pan` mismatch firing as separate user_flags for `gst_number`. Fix: if both fire, merge into one user_flag; cross-check only adds a `gst_cert_entity_mismatch` risk_factor. Clarified in cross-check section.
-8. **processes_data_no_iso false-positive on expired cert**: LLM inferred "not ISO certified" from expired cert even when `form.iso_certified=true`. Fix: added explicit rule — processes_data_no_iso checks form.iso_certified field ONLY, not expiry date.
+### Why unreadable_docs count as notified_factors
+`ocr_failed_*` risk_factors are in `RISK_FACTOR_TO_FLAG_FIELD` so cross-version delta can fire on them. But unreadable docs create `unreadable_docs` entries (not `user_flags`). The vendor IS emailed about unreadable docs. `_compute_notified_factors` uses `DOC_TYPE_TO_NOTIFIED_FIELD` to include `unreadable_docs` in the notified set — so if vendor re-uploads the same unreadable doc and it fails again, delta fires correctly.
+
+### Bug fixes applied to system prompt
+1. **processes_data false-positive**: LLM fired `processes_data_no_soc2`/`no_iso` even when `processes_data=false`. Fix: explicit IMPORTANT block.
+2. **Duplicate risk factors**: LLM created two risk factors for same doc. Fix: deduplication rule.
+3. **not_applicable hallucination**: LLM saw `form.iso_expiry_date` in past and fired ISO flags even when doc not uploaded. Fix: not_applicable overrides form fields rule.
+4. **Mismatch not scored**: Exact mismatches only created user_flags, no risk_factors. Fix: mismatch now creates both.
+5. **Cross-checks missing risk_factors**: `gst_cert_state_mismatch` and `pan_entity_type_mismatch` only created user_flags. Fix: both now create risk_factors too.
+6. **Incorporation date not verified**: OCR extracted `incorporation_date` from cert but it was never cross-checked against form. Fix: added `incorporation_date` to exact matches with date format normalization.
+7. **dpa.is_signed missing risk_factor**: Only created user_flag, cross-version escalation broken. Fix: now fires both user_flag + `dpa_not_signed` risk_factor.
+
+### Bug fixes applied to pipeline code (`ai_service.py`)
+1. **OCR-failed docs silently treated as not_applicable**: Filter `ocr_json is not None` excluded docs where OCR failed (`ocr_json=null`). All their exact match checks returned null → `"not_applicable"` → LLM skipped. Vendor never told to re-upload. Fix: two-pass dedup — Pass 1 picks successful OCR, Pass 2 adds failed-status docs for doc_types with no successful OCR.
+2. **`partnership_deed` and `dpa` invisible on OCR fail**: Neither doc had any exact match field, so even after the two-pass fix they'd have no entry in `exact_match_context`. Fix: presence-only checks `dpa_is_signed` and `partnership_firm_name` added — they surface OCR status without conflicting with LLM's value-level checks.
+3. **`_fetch` treats `False` as missing**: `if not val` evaluated boolean `False` as "partial". Fix: changed to `if val is None or val == ""`.
+4. **`iso_expiry_date` never cross-checked**: OCR extracted `iso_cert.expiry_date` but never compared to `form.iso_expiry_date`. Vendor could submit wrong expiry undetected. Fix: added `iso_expiry_date` to exact matches with date normalization (medium severity — date format differences common).
+5. **`cancelled_watermark` never checked**: OCR extracted `cancelled_cheque.cancelled_watermark` but nothing acted on it. Fix: system prompt now fires user_flag + `cancelled_cheque_no_watermark` risk_factor when false.
 
 ### Why temperature=0.1
-Need deterministic structured output — lower temperature reduces variation. Not 0 because occasional creative phrasing in messages is acceptable; only the structure needs to be consistent.
-
-### Why `response_format: json_object`
-Groq enforces JSON-only output. Without it, LLM sometimes wraps with ```json ``` blocks or adds explanation text. With it, `json.loads()` in `_call_llm()` is safe.
+Need deterministic structured output. Lower temperature reduces variation. Not 0 because occasional creative phrasing in messages is acceptable; only the structure needs to be consistent.
 
 ---
 
-## Risk Scoring Pipeline
+## Known Issues (Pending Fix)
 
-Runs immediately after the AI flag detection pipeline writes `risk_factors`. Pure code — no LLM involved.
+### LLM Doc-Level Cascade on Field Mismatch
 
----
+**Problem:** When one field in a doc mismatches (e.g. `iso_expiry_date_mismatch`), the LLM infers the whole document is invalid and cascades into compliance risk factors that are supposed to be gated on form fields only. Observed example: `iso_expiry_date_mismatch` fired → LLM also fired `processes_data_no_iso` despite `form.iso_certified = true`. The system prompt rule *"check iso_certified field only"* does not hold when LLM has OCR evidence that contradicts the form.
 
-### New columns on reviews table
+**Root cause:** Compliance risk factors (`processes_data_no_soc2`, `processes_data_no_iso`, `iso_cert_expired`, etc.) are designed as form-only checks. But LLM receives full OCR context and uses it to second-guess form booleans when it sees mismatches or expired dates in docs.
 
-```sql
-ALTER TABLE reviews
-  ADD COLUMN risk_score       INTEGER,
-  ADD COLUMN decision         TEXT,
-  ADD COLUMN notified_factors JSONB,
-  ADD COLUMN risk_reasoning   TEXT;
-```
+**Fix direction (not yet implemented):**
+- Exact match checks already handle all field-level doc verification independently of LLM.
+- Compliance/form-only risk factors should be pre-computed in code (like exact matches) and injected as `compliance_context` — not left to LLM judgment.
+- LLM scope should be limited to: fuzzy name checks, doc readability, mismatch messaging. Not compliance decisions.
+- This eliminates the one-wrong-field → whole-doc-condemned cascade entirely.
 
----
-
-### Phase 1 — Base score (current version only)
-
-Read `risk_factors` JSONB column from current reviews row. Weighted sum:
-
-| Severity | Points |
-|---|---|
-| high | 10 |
-| medium | 5 |
-| low | 2 |
-
-Sum all factors → cap at 100. This is the base score.
-
----
-
-### Phase 2 — Cross-version adjustment with decay
-
-Fetch all prior reviews rows for same vendor ordered by version descending. For each prior version compute influence weight using exponential decay:
-
-```
-weight = 0.5 ^ distance
-```
-
-- v-1 (immediate previous) → weight = 1.0
-- v-2 → weight = 0.5
-- v-3 → weight = 0.25
-- and so on
-
-For each prior version's `risk_factors`:
-- Factor **still present** in current version → `+5 × weight` (vendor ignored it — escalation)
-- Factor **gone** in current version → `-3 × weight` (vendor fixed it — positive signal)
-
-Sum all deltas → round → add to base score → clamp 0–100.
-
-**Why decay:** v1 flags matter less than v2 flags when computing v3 score. Old unfixed issues are less suspicious than recently introduced ones. Recent behaviour is stronger signal.
-
----
-
-### Decision thresholds
-
-| Score | Decision | Meaning |
-|---|---|---|
-| 0–5 | approved | Zero/trivial flags. Reviewer glances at signing. |
-| 6–50, user_flags non-empty | waiting_for_response | Vendor was notified. Awaiting v2. |
-| 6–50, user_flags empty | human_review | Internal risks only. No email sent. Human must review. |
-| 51–75 | human_review | Serious flags. Reviewer reads carefully. |
-| 76–89 | high_risk_review | Multiple serious flags. Senior reviewer urgently. |
-| 90–100 | rejected | Extreme fraud/risk signals. Auto-reject. |
-
-**v1 auto-approve logic:** score 0–5 means zero meaningful flags (only `low` severity at most). Any `medium` or `high` flag pushes score above 5 → human_review minimum.
-
-**`rejected`** also sets `applications.status = rejected`.
-
----
-
-### notified_factors — what it is and why
-
-`notified_factors` = list of risk_factor names that had a corresponding `user_flag` in the same version. Stored per reviews row.
-
-**Why:** Cross-version escalation only applies to factors the vendor was explicitly told about. If `data_offshore` fires but vendor was never emailed about it, penalising them for "not fixing" it is unfair. Only notified factors escalate.
-
-Mapping is hardcoded in `RISK_FACTOR_TO_FLAG_FIELD` in `ai_service.py`. Internal-only factors (`data_offshore`, `processes_data_no_soc2`, `employee_turnover_mismatch`, etc.) are not in the map — never escalate.
-
----
-
-### Cross-version decay formula
-
-```
-weight = 0.5 ^ (distance - 1)
-
-v-1 (most recent prior)  → weight 1.0
-v-2                      → weight 0.5
-v-3                      → weight 0.25
-```
-
-For each prior version:
-- Notified factor still present in current → `+5 × weight`
-- Notified factor resolved in current → `-3 × weight`
-
-Sum all deltas → round → add to base → clamp 0–100.
-
----
-
-### Reasoning LLM — `_call_reasoning_llm()`
-
-Runs after scoring. Produces `risk_reasoning` — plain English note for human reviewer.
-
-**Input (built by `build_reasoning_input()`):**
-```json
-{
-  "vendor_id": "...",
-  "versions": [
-    {
-      "version": 1,
-      "risk_factors": [...],
-      "notified_factors": [...],
-      "risk_score": 42,
-      "decision": "waiting_for_response"
-    }
-  ]
-}
-```
-
-**Model:** Groq (LLaMA 3.3 70B) — active. Ollama 8B — commented fallback.
-
-**Why not Ollama 8B for reasoning:** 8B hallucinates facts (says score increased when it decreased), misses cross-version escalation narrative, gives generic notes. Groq 70B correctly identifies patterns like "vendor ignored two explicit requests across two cycles" and gives actionable reviewer recommendations.
-
-**Temperature:** 0.3 — slightly higher than flag detection (0.1) because reasoning benefits from natural language variation. Structure not required here.
-
-**Output:** Plain text, 3–5 sentences. No JSON. Stored in `reviews.risk_reasoning`.
-
-**Score/decision not repeated** — reviewer already sees those fields. LLM focuses on WHY and WHAT NEXT.
-
-**Switch to Ollama fallback:** Comment Groq block, uncomment Ollama block in `_call_reasoning_llm()`.
-
----
-
-### Flow (chained into `run_ai_pipeline()`)
-
-```
-run_ai_pipeline()
-    │
-    ├─ [existing] LLM writes user_flags + risk_factors + unreadable_docs
-    │
-    └─ _compute_risk_score_and_store()
-         ├─ Phase 1: base score from current risk_factors
-         ├─ Phase 2: cross-version decay adjustment from prior reviews
-         ├─ Compute decision
-         ├─ Write risk_score + decision to reviews row
-         └─ If auto_reject → set applications.status = rejected
-```
+**Workaround until fix:** System prompt rules exist (`ONLY fire processes_data_no_iso if iso_certified IS EXACTLY true`) but are unreliable when OCR evidence contradicts the form.
 
 ---
 
 ## Status
 
-**AI Flag Detection Pipeline — COMPLETE**
-- `services/ai_service.py` — exact matches, context labels, Groq LLM call, reviews upsert
+**AI Pipeline — COMPLETE (May 2026 bug fix pass)**
+
+Built:
+- `services/ai_service.py` — full pipeline: exact matches, partial detection, OCR cross-checks, fuzzy name scoring, Groq LLM call, cross-version scoring, reviews upsert
+- `groq` added to `requirements.txt`
 - `ocr_service.py` chains `run_ai_pipeline()` at end of OCR loop
-- 7 test cases in `ai_test_runner.py`, results in `ai_test_output.json`
-- Groq (llama-3.3-70b-versatile) active. Ollama (llama3.1:8b) commented in as fallback.
+- `GROQ_API_KEY` added to `.env`
+- Cross-version risk scoring with decay-weighted delta — complete
+- Email notification to vendor on flags — complete
 
-**Risk Scoring + Reasoning — COMPLETE**
-- `compute_risk_score_and_store()` — base score, cross-version delta, decision, notified_factors
-- `_call_reasoning_llm()` — Groq (active) / Ollama 8B (fallback) plain English reviewer note
-- `risk_test_runner.py` — 5 test cases, all passing, reasoning output verified
-
-**Pending SQL (run on Supabase):**
-```sql
--- reviews table (if not created yet)
-CREATE TABLE reviews (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  application_id UUID REFERENCES applications(id) UNIQUE,
-  vendor_id UUID REFERENCES vendors(id),
-  user_flags JSONB,
-  risk_factors JSONB,
-  unreadable_docs JSONB,
-  ai_status TEXT DEFAULT 'not_started',
-  created_at TIMESTAMP DEFAULT NOW()
-);
-
--- new columns (add if table already exists)
-ALTER TABLE reviews
-  ADD COLUMN risk_score       INTEGER,
-  ADD COLUMN decision         TEXT,
-  ADD COLUMN notified_factors JSONB,
-  ADD COLUMN risk_reasoning   TEXT;
-```
-
-**To switch reasoning LLM to Haiku:**
-1. Add `ANTHROPIC_API_KEY` to `.env`
-2. `pip install anthropic`
-3. Uncomment Anthropic block in `_call_reasoning_llm()`, comment Ollama block
+Bug fix pass (May 2026):
+- OCR-failed docs no longer silently skipped (two-pass dedup)
+- `partnership_deed` and `dpa` OCR failures now surface correctly (presence-only checks)
+- `_fetch` no longer treats boolean `False` as missing
+- `iso_expiry_date` exact match added (cross-checks form vs cert)
+- `cancelled_watermark=false` now flagged
+- `dpa_not_signed` risk factor added (was missing, broke cross-version escalation)

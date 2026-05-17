@@ -8,6 +8,14 @@ function headers() {
   }
 }
 
+function adminHeaders() {
+  const token = localStorage.getItem('adminToken')
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {})
+  }
+}
+
 export async function login(email) {
   const res = await fetch(`${BASE}/auth/login`, {
     method: 'POST',
@@ -59,6 +67,25 @@ export async function getApplication(id) {
 export async function getDocuments() {
   const res = await fetch(`${BASE}/documents/`, { headers: headers() })
   if (!res.ok) throw new Error('Failed to fetch documents')
+  return res.json()
+}
+
+export async function adminLogin(email) {
+  const res = await fetch(`${BASE}/admin/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  })
+  if (res.status === 403) throw new Error('403')
+  if (!res.ok) throw new Error('Login failed')
+  return res.json()
+}
+
+export async function adminGetVendors() {
+  const res = await fetch(`${BASE}/admin/vendors`, { headers: adminHeaders() })
+  if (res.status === 401) throw new Error('401')
+  if (res.status === 403) throw new Error('403')
+  if (!res.ok) throw new Error('Failed to fetch vendors')
   return res.json()
 }
 

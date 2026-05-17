@@ -84,6 +84,7 @@ export default function Form() {
   const [draftSaved, setDraftSaved] = useState(false)
   const [error, setError] = useState('')
   const [validationErrors, setValidationErrors] = useState([])
+  const [submitted, setSubmitted] = useState(false)
 
   useEffect(() => {
     getStatus()
@@ -130,7 +131,7 @@ export default function Form() {
       if (result.errors && result.errors.length > 0) {
         setValidationErrors(result.errors)
       } else {
-        navigate('/status')
+        setSubmitted(true)
       }
     } catch (err) {
       setError(err.message)
@@ -190,6 +191,29 @@ export default function Form() {
       { key: 'msme_cert', label: 'MSME Certificate', show: !!form.msme_number },
     ]
     return list.filter(d => d.always || d.show)
+  }
+
+  if (submitted) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+        <div className="max-w-md w-full bg-white rounded-2xl shadow-sm border border-gray-100 p-10 text-center">
+          <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-5">
+            <svg className="w-8 h-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+          <h2 className="text-xl font-bold text-gray-900 mb-2">Application Submitted</h2>
+          <p className="text-sm text-gray-500 mb-1">Your application is under review.</p>
+          <p className="text-sm text-gray-500 mb-8">You will receive an email shortly with the status of your submission.</p>
+          <button
+            onClick={() => navigate('/status')}
+            className="w-full bg-indigo-600 text-white rounded-lg py-3 text-sm font-semibold hover:bg-indigo-700 transition"
+          >
+            View Application Status
+          </button>
+        </div>
+      </div>
+    )
   }
 
   return (

@@ -1,10 +1,12 @@
 import json
 import logging
 import os
-from datetime import date
+import re
+from datetime import date, datetime, timezone
 
 from groq import Groq
 # import httpx  # Ollama local fallback — uncomment when switching
+from services.email_service import send_vendor_flags_email
 from services.supabase_client import get_supabase
 
 STATE_GST_CODES = {
@@ -30,6 +32,20 @@ PAN_CHAR_COMPANY_TYPE = {
 }
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_date(raw: str | None) -> str | None:
+    """Normalize to YYYY-MM-DD. Handles YYYY-MM-DD and DD-MM-YYYY / DD/MM/YYYY."""
+    if not raw:
+        return None
+    raw = str(raw).strip()
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', raw):
+        return raw
+    m = re.match(r'^(\d{2})[/-](\d{2})[/-](\d{4})$', raw)
+    if m:
+        return f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
+    return None
+
 
 # ── Model config ────────────────────────────────────────────────────────────
 # Switch: comment one block, uncomment the other
@@ -70,7 +86,7 @@ def _compute_exact_matches(form: dict, ocr: dict) -> dict:
         if doc.get("status") != "done":
             return ("failed", None)
         val = doc.get(field)
-        if not val:
+        if val is None or val == "":
             return ("partial", None)
         return ("ok", str(val).strip().upper())
 
@@ -90,6 +106,47 @@ def _compute_exact_matches(form: dict, ocr: dict) -> dict:
         if form_val is None:
             return None
         return str(form_val).strip().upper() == ocr_val
+
+    def _match_date(form_val, doc_type: str, ocr_field: str) -> bool | str | None:
+        """Like _match but normalizes date formats before comparison."""
+        state, ocr_val = _fetch(doc_type, ocr_field)
+        if state in ("no_doc", "failed"):
+            return None
+        if state == "partial":
+            return "partial"
+        if form_val is None:
+            return None
+        norm_form = _normalize_date(str(form_val))
+        norm_ocr = _normalize_date(ocr_val) if ocr_val else None
+        if norm_form is None or norm_ocr is None:
+            return None
+        return norm_form == norm_ocr
+
+    def _match_dpa_signed() -> bool | str | None:
+        """Presence check for dpa.is_signed — True=present, "partial"=missing, None=failed/not uploaded.
+        Actual is_signed=false flagging is handled by LLM from ocr directly."""
+        doc = ocr.get("dpa")
+        if doc is None:
+            return None
+        if doc.get("status") != "done":
+            return None
+        val = doc.get("is_signed")
+        if val is None:
+            return "partial"
+        return True
+
+    def _match_partnership_firm() -> bool | str | None:
+        """Presence check for partnership_deed.firm_name — gets OCR status into exact_match_context.
+        Fuzzy name comparison is handled by LLM from ocr directly."""
+        doc = ocr.get("partnership_deed")
+        if doc is None:
+            return None
+        if doc.get("status") != "done":
+            return None
+        val = doc.get("firm_name")
+        if val is None:
+            return "partial"
+        return True
 
     # Fetch OCR values for cross-checks
     gstin_state, ocr_gstin = _fetch("gst_cert", "gstin")
@@ -122,14 +179,19 @@ def _compute_exact_matches(form: dict, ocr: dict) -> dict:
     return {
         # Form field vs OCR extracted value
         # true = match | false = mismatch | "partial" = doc read but field missing | null = whole doc failed or not applicable
-        "pan_number":      _match(form.get("pan_number"),      "pan_card",         "pan_number"),
-        "ifsc_code":       _match(form.get("ifsc_code"),       "cancelled_cheque", "ifsc_code"),
-        "account_number":  _match(form.get("account_number"),  "cancelled_cheque", "account_number"),
-        "gst_number":      _match(form.get("gst_number"),      "gst_cert",         "gstin"),
-        "cin_number":      _match(form.get("cin_number"),      "incorporation",    "cin_number"),
-        "llp_number":      _match(form.get("llp_number"),      "llp_agreement",    "llp_number"),
-        "msme_number":     _match(form.get("msme_number"),     "msme_cert",        "udyam_number"),
-        "iso_cert_number": _match(form.get("iso_cert_number"), "iso_cert",         "cert_number"),
+        "pan_number":          _match(form.get("pan_number"),          "pan_card",         "pan_number"),
+        "ifsc_code":           _match(form.get("ifsc_code"),           "cancelled_cheque", "ifsc_code"),
+        "account_number":      _match(form.get("account_number"),      "cancelled_cheque", "account_number"),
+        "gst_number":          _match(form.get("gst_number"),          "gst_cert",         "gstin"),
+        "cin_number":          _match(form.get("cin_number"),          "incorporation",    "cin_number"),
+        "incorporation_date":  _match_date(form.get("incorporation_date"), "incorporation", "incorporation_date"),
+        "llp_number":          _match(form.get("llp_number"),          "llp_agreement",    "llp_number"),
+        "msme_number":         _match(form.get("msme_number"),         "msme_cert",        "udyam_number"),
+        "iso_cert_number":     _match(form.get("iso_cert_number"),     "iso_cert",         "cert_number"),
+        "iso_expiry_date":     _match_date(form.get("iso_expiry_date"), "iso_cert",         "expiry_date"),
+        # Presence-only checks — get OCR status into context for docs with no numeric exact match
+        "dpa_is_signed":        _match_dpa_signed(),
+        "partnership_firm_name": _match_partnership_firm(),
         # OCR cross-checks — derived from doc content
         "ocr_gstin_state_matches_form_state":   ocr_gstin_state_match,
         "ocr_gstin_pan_matches_form_pan":        ocr_gstin_pan_match,
@@ -144,12 +206,16 @@ FIELD_TO_DOC: dict[str, str] = {
     "account_number":                        "cancelled_cheque",
     "gst_number":                            "gst_cert",
     "cin_number":                            "incorporation",
+    "incorporation_date":                    "incorporation",
     "llp_number":                            "llp_agreement",
     "msme_number":                           "msme_cert",
     "iso_cert_number":                       "iso_cert",
     "ocr_gstin_state_matches_form_state":    "gst_cert",
     "ocr_gstin_pan_matches_form_pan":        "gst_cert",
     "ocr_pan_4th_char_matches_company_type": "pan_card",
+    "iso_expiry_date":                       "iso_cert",
+    "dpa_is_signed":                         "dpa",
+    "partnership_firm_name":                 "partnership_deed",
 }
 
 
@@ -180,8 +246,10 @@ def _compute_exact_match_context(exact_matches: dict, ocr_summary: dict) -> dict
                 context[field] = f"not_applicable — {doc_type} was not required for this vendor"
             elif doc.get("status") == "failed":
                 context[field] = f"doc_ocr_failed — {doc_type} could not be read at all"
+            elif doc.get("status") == "done":
+                context[field] = f"not_applicable — form field not provided, cannot compare against {doc_type}"
             else:
-                context[field] = f"not_applicable — {doc_type} was not required for this vendor"
+                context[field] = f"not_applicable — {doc_type} OCR status is {doc.get('status')}"
     return context
 
 
@@ -233,8 +301,11 @@ Return a JSON object with EXACTLY these three keys (always present, use [] if em
   → field confirmed correct. Skip. Do not add any flag.
 
 "mismatch — ..."
-  → extracted value does not match form. Add to user_flags (severity: high).
-  → message must tell vendor what field is wrong and ask them to correct it.
+  → extracted value does not match form. Do BOTH:
+    (1) user_flags: severity:high, tell vendor exactly which value is wrong and ask to correct
+    (2) risk_factors: factor="<field_name>_mismatch", severity:high
+  Exception: incorporation_date mismatch → severity:medium for both (date format differences are common)
+  Exception: iso_expiry_date mismatch → severity:medium for both (date format differences are common)
 
 "partial_read — ..."
   → doc was read but this specific field is missing. Possible obscured/edited document.
@@ -242,19 +313,38 @@ Return a JSON object with EXACTLY these three keys (always present, use [] if em
              (2) risk_factors factor="partial_ocr_<doc_type>" severity:medium noting possible tampering
 
 "doc_ocr_failed — ..."
-  → whole doc could not be read. Add to unreadable_docs asking vendor to re-upload.
-  → also add risk_factors factor="ocr_failed_<doc_type>" severity:low
+  → whole doc could not be read. Do ALL THREE:
+    (1) unreadable_docs: add entry with doc_type and message asking vendor to re-upload
+    (2) user_flags: ONE entry per doc (even if multiple keys reference same doc), field=doc_type (e.g. "pan_card", "gst_cert"), severity:medium asking vendor to re-upload
+    (3) risk_factors: factor="ocr_failed_<doc_type>" severity:low
+  IMPORTANT: one user_flag per failed doc regardless of how many exact_match_context keys reference it
 
 "not_applicable — ..."
   → doc was not required for this vendor. Skip entirely. Do not flag.
 
 ━━━ FUZZY NAME CHECKS (from ocr fields) ━━━
 
-Check these from ocr data directly:
-- ocr.pan_card.name_on_card vs form.company_name → fuzzy match. "Pvt Ltd"=="Private Limited"=="PVT LTD". Flag only clear mismatches (different entity entirely).
-- ocr.cancelled_cheque.account_holder_name vs form.account_holder_name → fuzzy match. Flag if clearly different person/entity name.
-- ocr.gst_cert.legal_name vs form.company_name → fuzzy match.
-- ocr.dpa.is_signed = false → user_flags severity:high, ask vendor to upload signed DPA.
+For each name check below, compare the extracted name against form.company_name and judge similarity:
+
+  no_issue → same entity (abbreviations, "Pvt Ltd"="Private Limited", "Ltd"="Limited", etc.) → SKIP entirely, no entry
+  low      → minor variation (slight word order, extra word, minor formatting) → risk_factor ONLY (severity:low), NO user_flag
+  medium   → different name but possibly related (trading name, subsidiary, group entity) → BOTH user_flag + risk_factor (severity:medium)
+  high     → completely unrelated entity → BOTH user_flag + risk_factor (severity:high)
+
+Skip any name check where the OCR field is null or missing.
+
+Name checks (only if doc was uploaded and OCR field is present):
+- ocr.pan_card.name_on_card vs form.company_name → factor="pan_name_mismatch", user_flag field="pan_name"
+- ocr.cancelled_cheque.account_holder_name vs form.company_name → factor="account_holder_name_mismatch", user_flag field="account_holder_name"
+- ocr.gst_cert.legal_name vs form.company_name → factor="gst_legal_name_mismatch", user_flag field="gst_legal_name"
+- ocr.incorporation.company_name vs form.company_name → factor="incorporation_name_mismatch", user_flag field="incorporation_company_name"
+- ocr.llp_agreement.company_name vs form.company_name → factor="llp_name_mismatch", user_flag field="llp_company_name"
+- ocr.iso_cert.company_name vs form.company_name → factor="iso_name_mismatch", user_flag field="iso_company_name"
+- ocr.msme_cert.enterprise_name vs form.company_name → factor="msme_name_mismatch", user_flag field="msme_enterprise_name"
+- ocr.partnership_deed.firm_name vs form.company_name → factor="partnership_name_mismatch", user_flag field="partnership_firm_name"
+- ocr.dpa.is_signed = false → BOTH: user_flags field="dpa" severity:medium (ask vendor to upload signed DPA) + risk_factors factor="dpa_not_signed" severity:medium
+- ocr.cancelled_cheque.cancelled_watermark = false → BOTH: user_flags field="cancelled_cheque" severity:low (inform vendor cheque does not appear cancelled — re-upload a properly cancelled cheque) + risk_factors factor="cancelled_cheque_no_watermark" severity:low
+Note: exact_match_context keys "dpa_is_signed" and "partnership_firm_name" indicate OCR status only (partial/failed/done). "verified" means field was extracted — still check ocr.dpa.is_signed value above.
 
 ━━━ RISK FACTOR CHECKS (from form fields only) ━━━
 
@@ -277,13 +367,13 @@ IMPORTANT — DPA conditions:
 - ONLY flag DPA (not signed) if exact_match_context has a dpa-related key that is NOT "not_applicable" AND ocr.dpa.is_signed = false explicitly. If dpa is not_applicable, skip entirely.
 
 IMPORTANT — no duplicates:
-- For each doc_type, add at most ONE risk factor. If multiple exact_match_context keys point to the same doc_type with the same issue (e.g. two keys both say doc_ocr_failed for incorporation), create only one risk_factor entry for that doc_type.
+- For each doc_type, add at most ONE risk factor of a given type. If multiple exact_match_context keys point to the same doc_type with the same issue, create only one risk_factor entry.
 
-Full condition list:
-- form.iso_expiry_date exists AND form.iso_expiry_date < today AND iso_cert_number NOT not_applicable → BOTH: user_flags field="iso_cert" severity:high asking vendor to upload renewed cert + risk_factors factor:iso_cert_expired severity:high
+Full condition list (form-based risk factors):
+- form.iso_expiry_date exists AND form.iso_expiry_date < today AND iso_cert_number NOT not_applicable → BOTH: user_flags field="iso_cert" severity:high + risk_factors factor:iso_cert_expired severity:high
 - form.processes_data=true AND form.soc2_audited=false → risk_factors factor:processes_data_no_soc2 severity:medium
 - form.processes_data=true AND form.iso_certified=false → risk_factors factor:processes_data_no_iso severity:medium
-- form.data_in_india=false (boolean false) → risk_factors factor:data_offshore severity:high. If data_in_india=true, do NOT fire data_offshore.
+- form.data_in_india=false (boolean false) → risk_factors factor:data_offshore severity:high
 - form.employee_count vs form.annual_turnover implausible (e.g. 400 employees, <1 Cr) → risk_factors factor:employee_turnover_mismatch severity:high
 - form.processes_data=true AND form.cyber_coverage_crores low relative to turnover → risk_factors factor:low_cyber_coverage severity:medium
 - form.company_age_years < 2 → risk_factors factor:new_company severity:low
@@ -294,9 +384,14 @@ Full condition list:
 CRITICAL: Only act on a cross-check key if its exact_match_context label is "mismatch". If the label is "verified" or "not_applicable", skip entirely — no flag of any kind.
 
 When exact_match_context label for these keys is "mismatch":
-- ocr_gstin_state_matches_form_state: GST cert state code doesn't match declared state. Use field name "gst_cert_state_mismatch" in user_flags.
-- ocr_gstin_pan_matches_form_pan: PAN inside GST cert doesn't match vendor PAN. If gst_number is ALSO mismatch, do NOT create a separate user_flag for this — the gst_number user_flag already covers it. Only add a risk_factor "gst_cert_entity_mismatch".
-- ocr_pan_4th_char_matches_company_type: PAN entity type char doesn't match declared company type. Use field name "pan_entity_type_mismatch" in user_flags.
+- ocr_gstin_state_matches_form_state: GST cert state code doesn't match declared state.
+    → BOTH: user_flags field="gst_cert_state_mismatch" severity:high + risk_factors factor="gst_cert_state_mismatch" severity:high
+- ocr_gstin_pan_matches_form_pan: PAN inside GST cert doesn't match vendor PAN.
+    → risk_factors factor="gst_cert_entity_mismatch" severity:high always
+    → If gst_number is ALSO mismatch, do NOT create a separate user_flag — the gst_number user_flag already covers it
+    → If gst_number is NOT mismatch, also add user_flags field="gst_number" severity:high noting PAN-GSTIN mismatch
+- ocr_pan_4th_char_matches_company_type: PAN entity type char doesn't match declared company type.
+    → BOTH: user_flags field="pan_entity_type_mismatch" severity:high + risk_factors factor="pan_entity_type_mismatch" severity:high
 
 ━━━ FEW-SHOT EXAMPLES ━━━
 
@@ -304,11 +399,12 @@ Example 1 — verified field (skip it):
   exact_match_context: { "pan_number": "verified" }
   Output: no entry in any array for pan_number
 
-Example 2 — mismatch on pan_number:
+Example 2 — mismatch on pan_number → BOTH user_flag AND risk_factor:
   exact_match_context: { "pan_number": "mismatch — value extracted from pan_card does not match form" }
   form.pan_number: "AABCX1234C", ocr.pan_card.pan_number: "AABCZ9999C"
   Output:
   user_flags: [{ "field": "pan_number", "severity": "high", "message": "The PAN number on your PAN card (AABCZ9999C) does not match the PAN number you submitted (AABCX1234C). Please upload the correct PAN card." }]
+  risk_factors: [{ "factor": "pan_number_mismatch", "severity": "high", "note": "PAN on card (AABCZ9999C) does not match form PAN (AABCX1234C)." }]
 
 Example 3 — partial_read on gst_cert:
   exact_match_context: { "gst_number": "partial_read — gst_cert OCR succeeded but this field is null; possible obscured or edited document" }
@@ -317,51 +413,68 @@ Example 3 — partial_read on gst_cert:
   risk_factors: [{ "factor": "partial_ocr_gst_cert", "severity": "medium", "note": "GST cert OCR partial — GSTIN field missing. Possible obscured or edited document." }]
 
 Example 4 — doc_ocr_failed on incorporation:
-  exact_match_context: { "cin_number": "doc_ocr_failed — incorporation could not be read at all" }
+  exact_match_context: { "cin_number": "doc_ocr_failed — incorporation could not be read at all", "incorporation_date": "doc_ocr_failed — incorporation could not be read at all" }
   Output:
   unreadable_docs: [{ "doc_type": "incorporation", "message": "Your Certificate of Incorporation could not be read. Please re-upload a clear copy." }]
+  user_flags: [{ "field": "incorporation", "severity": "medium", "message": "Your Certificate of Incorporation could not be read. Please re-upload a clear copy." }]
   risk_factors: [{ "factor": "ocr_failed_incorporation", "severity": "low", "note": "Incorporation cert OCR failed completely." }]
+  NOTE: one user_flag even though both cin_number and incorporation_date reference the same doc.
 
 Example 5 — not_applicable (skip entirely):
   exact_match_context: { "llp_number": "not_applicable — llp_agreement was not required for this vendor" }
   Output: no entry in any array for llp_number
 
-Example 6 — fuzzy name clear mismatch:
-  form.account_holder_name: "Silverline IT Solutions Pvt Ltd"
+Example 6 — fuzzy name: abbreviation (no_issue → skip entirely):
+  form.company_name: "Silverline IT Solutions Private Limited"
+  ocr.pan_card.name_on_card: "SILVERLINE IT SOLUTIONS PVT LTD"
+  Output: no pan_name_mismatch entry. "Pvt Ltd" = "Private Limited" — same entity.
+
+Example 7 — fuzzy name: completely different entity (high → both):
+  form.company_name: "Silverline IT Solutions Pvt Ltd"
   ocr.cancelled_cheque.account_holder_name: "Rajesh Kumar Mehta"
   Output:
-  user_flags: [{ "field": "account_holder_name", "severity": "high", "message": "The account holder name on your cancelled cheque ('Rajesh Kumar Mehta') does not match your company name. Please upload a cheque for your company's bank account." }]
-  risk_factors: [{ "factor": "account_holder_name_mismatch", "severity": "high", "note": "Cheque account holder 'Rajesh Kumar Mehta' is unrelated to company 'Silverline IT Solutions Pvt Ltd'. Possible personal account submitted." }]
+  user_flags: [{ "field": "account_holder_name", "severity": "high", "message": "The account holder on your cancelled cheque ('Rajesh Kumar Mehta') is a personal name and does not match your company. Please upload a cheque from your company's bank account." }]
+  risk_factors: [{ "factor": "account_holder_name_mismatch", "severity": "high", "note": "Cheque account holder 'Rajesh Kumar Mehta' is a personal name unrelated to company 'Silverline IT Solutions Pvt Ltd'." }]
 
-Example 7 — not_applicable must NOT be flagged:
+Example 8 — fuzzy name: minor variation (low → risk_factor only, no user_flag):
+  form.company_name: "Silverline IT Solutions Pvt Ltd"
+  ocr.incorporation.company_name: "Silverline Information Technology Solutions Pvt Ltd"
+  Output:
+  risk_factors: [{ "factor": "incorporation_name_mismatch", "severity": "low", "note": "Incorporation cert name is a minor variation — likely same entity with abbreviated trade name." }]
+  (no user_flag — minor variation, vendor need not act)
+
+Example 9 — incorporation_date mismatch → medium severity:
+  exact_match_context: { "incorporation_date": "mismatch — value extracted from incorporation does not match form" }
+  form.incorporation_date: "2018-03-15", ocr extracted: "2019-03-15"
+  Output:
+  user_flags: [{ "field": "incorporation_date", "severity": "medium", "message": "The incorporation date on your Certificate of Incorporation does not match what you submitted. Please verify and correct." }]
+  risk_factors: [{ "factor": "incorporation_date_mismatch", "severity": "medium", "note": "Incorporation cert date does not match form-declared date." }]
+
+Example 10 — gst_cert_state_mismatch → both user_flag AND risk_factor:
+  exact_match_context: { "ocr_gstin_state_matches_form_state": "mismatch — value extracted from gst_cert does not match form" }
+  Output:
+  user_flags: [{ "field": "gst_cert_state_mismatch", "severity": "high", "message": "The state code in your GST certificate does not match your declared state. Please verify your GST number and state." }]
+  risk_factors: [{ "factor": "gst_cert_state_mismatch", "severity": "high", "note": "GST cert state code does not match declared state." }]
+
+Example 11 — not_applicable must NOT be flagged:
   form.iso_certified: false, exact_match_context: { "iso_cert_number": "not_applicable — iso_cert was not required for this vendor" }
   form.processes_data: false
   Output: no iso or dpa flags of any kind
 
-Example 8 — not_applicable overrides form fields (iso_expiry_date present but doc not uploaded):
+Example 12 — not_applicable overrides form fields:
   form.iso_certified: true, form.iso_expiry_date: "2024-01-01" (past date)
   exact_match_context: { "iso_cert_number": "not_applicable — iso_cert was not required for this vendor" }
-  Output: no iso flags. iso_cert_number is not_applicable — doc was not uploaded. Do not fire iso_cert_expired.
+  Output: no iso flags. iso_cert_number is not_applicable — doc was not uploaded.
 
-Example 9 — processes_data=false blocks soc2/iso risk factors:
+Example 13 — processes_data=false blocks soc2/iso risk factors:
   form.processes_data: false, form.soc2_audited: false, form.iso_certified: false
-  Output: no processes_data_no_soc2, no processes_data_no_iso. processes_data is false so neither condition applies.
+  Output: no processes_data_no_soc2, no processes_data_no_iso.
 
-Example 10 — deduplicate risk factors for same doc:
-  exact_match_context: {
-    "cin_number": "doc_ocr_failed — incorporation could not be read at all",
-    "llp_number": "not_applicable — llp_agreement was not required for this vendor"
-  }
-  Only one doc failed (incorporation). Output:
-  unreadable_docs: [{ "doc_type": "incorporation", ... }]
-  risk_factors: [{ "factor": "ocr_failed_incorporation", "severity": "low", ... }]
-  (one entry only — not two entries for the same doc)
-
-Example 11 — data_in_india=true means NO risk (data is already in India):
+Example 14 — data_in_india=true means no risk:
   form.data_in_india: true
-  Output: no data_offshore risk factor. data_in_india=true means data is stored in India, which is fine.
+  Output: no data_offshore risk factor.
 
-Example 12 — iso_cert_expired fires both user_flag AND risk_factor:
+Example 15 — iso_cert_expired fires both user_flag AND risk_factor:
   form.iso_expiry_date: "2025-01-01" (before today), exact_match_context.iso_cert_number: "verified"
   Output:
   user_flags: [{ "field": "iso_cert", "severity": "high", "message": "Your ISO certificate expired on 2025-01-01. Please upload the renewed certificate." }]
@@ -437,29 +550,73 @@ SEVERITY_WEIGHT = {"high": 10, "medium": 5, "low": 2}
 # risk_factor name → user_flag field it corresponds to (if any)
 # factors NOT in this map are internal-only — never escalated cross-version
 RISK_FACTOR_TO_FLAG_FIELD: dict[str, str] = {
+    # Partial OCR (field missing in doc)
     "partial_ocr_pan_card":              "pan_number",
     "partial_ocr_cancelled_cheque":      "cancelled_cheque",
     "partial_ocr_gst_cert":              "gst_number",
     "partial_ocr_incorporation":         "cin_number",
     "partial_ocr_llp_agreement":         "llp_number",
     "partial_ocr_msme_cert":             "msme_number",
-    "partial_ocr_iso_cert":              "iso_cert",
+    "partial_ocr_iso_cert":              "iso_cert_number",
     "partial_ocr_dpa":                   "dpa",
+    "partial_ocr_partnership_deed":      "partnership_firm_name",
+    # OCR failed (whole doc unreadable) — notified via unreadable_docs + DOC_TYPE_TO_NOTIFIED_FIELD
     "ocr_failed_pan_card":               "pan_number",
     "ocr_failed_cancelled_cheque":       "cancelled_cheque",
     "ocr_failed_gst_cert":               "gst_number",
     "ocr_failed_incorporation":          "cin_number",
     "ocr_failed_llp_agreement":          "llp_number",
     "ocr_failed_msme_cert":              "msme_number",
-    "ocr_failed_iso_cert":               "iso_cert",
+    "ocr_failed_iso_cert":               "iso_cert_number",
     "ocr_failed_dpa":                    "dpa",
-    "iso_cert_expired":                  "iso_cert",
-    "account_holder_name_mismatch":      "account_holder_name",
+    "ocr_failed_partnership_deed":       "partnership_firm_name",
+    # Exact number/date mismatches
+    "pan_number_mismatch":               "pan_number",
+    "ifsc_code_mismatch":                "ifsc_code",
+    "account_number_mismatch":           "account_number",
+    "gst_number_mismatch":               "gst_number",
+    "cin_number_mismatch":               "cin_number",
+    "incorporation_date_mismatch":       "incorporation_date",
+    "llp_number_mismatch":               "llp_number",
+    "msme_number_mismatch":              "msme_number",
+    "iso_cert_number_mismatch":          "iso_cert_number",
+    "iso_expiry_date_mismatch":          "iso_expiry_date",
+    # OCR cross-check mismatches
+    "gst_cert_state_mismatch":           "gst_cert_state_mismatch",
     "gst_cert_entity_mismatch":          "gst_number",
-    "pan_entity_type_mismatch":          "pan_number",
+    "pan_entity_type_mismatch":          "pan_entity_type_mismatch",
+    # ISO expiry
+    "iso_cert_expired":                  "iso_cert",
+    # DPA not signed
+    "dpa_not_signed":                    "dpa",
+    # Cancelled cheque without watermark
+    "cancelled_cheque_no_watermark":     "cancelled_cheque",
+    # Name mismatches — medium/high only; low severity are internal-only (not in this map)
+    "account_holder_name_mismatch":      "account_holder_name",
+    "pan_name_mismatch":                 "pan_name",
+    "gst_legal_name_mismatch":           "gst_legal_name",
+    "incorporation_name_mismatch":       "incorporation_company_name",
+    "llp_name_mismatch":                 "llp_company_name",
+    "iso_name_mismatch":                 "iso_company_name",
+    "msme_name_mismatch":                "msme_enterprise_name",
+    "partnership_name_mismatch":         "partnership_firm_name",
+    # Internal-only (no user_flag, no cross-version escalation):
     # data_offshore, processes_data_no_soc2, processes_data_no_iso,
-    # employee_turnover_mismatch, low_cyber_coverage, new_company,
-    # service_turnover_mismatch → internal only, not in map
+    # employee_turnover_mismatch, low_cyber_coverage, new_company, service_turnover_mismatch
+    # Low-severity name mismatches — not in map (scored but vendor not notified)
+}
+
+# doc_type → notified field for unreadable_docs cross-version escalation tracking
+DOC_TYPE_TO_NOTIFIED_FIELD: dict[str, str] = {
+    "pan_card":         "pan_number",
+    "cancelled_cheque": "cancelled_cheque",
+    "gst_cert":         "gst_number",
+    "incorporation":    "cin_number",
+    "llp_agreement":    "llp_number",
+    "msme_cert":        "msme_number",
+    "iso_cert":         "iso_cert_number",
+    "dpa":              "dpa",
+    "partnership_deed": "partnership_firm_name",
 }
 
 
@@ -467,9 +624,20 @@ def _base_score(risk_factors: list[dict]) -> int:
     return min(sum(SEVERITY_WEIGHT.get(f.get("severity", "low"), 2) for f in risk_factors), 100)
 
 
-def _compute_notified_factors(risk_factors: list[dict], user_flags: list[dict]) -> list[str]:
-    """Returns factor names that had a corresponding user_flag in this version."""
+def _compute_notified_factors(
+    risk_factors: list[dict],
+    user_flags: list[dict],
+    unreadable_docs: list[dict] | None = None,
+) -> list[str]:
+    """Returns factor names that had a corresponding user notification in this version.
+    Notifications come from user_flags (most factors) and unreadable_docs (ocr_failed_* factors).
+    """
     notified_fields = {uf["field"] for uf in user_flags}
+    if unreadable_docs:
+        for ud in unreadable_docs:
+            field = DOC_TYPE_TO_NOTIFIED_FIELD.get(ud.get("doc_type", ""))
+            if field:
+                notified_fields.add(field)
     return [
         f["factor"] for f in risk_factors
         if RISK_FACTOR_TO_FLAG_FIELD.get(f["factor"]) in notified_fields
@@ -577,7 +745,7 @@ def _call_reasoning_llm(reasoning_input: dict) -> str:
     # return resp.json()["message"]["content"].strip()
 
 
-def compute_risk_score_and_store(sb, app_id: str, vendor_id: str, risk_factors: list[dict], user_flags: list[dict]):
+def compute_risk_score_and_store(sb, app_id: str, vendor_id: str, risk_factors: list[dict], user_flags: list[dict], unreadable_docs: list[dict] | None = None):
     # Fetch all prior reviews for this vendor (not current app), with version numbers
     prior_rows = (
         sb.table("reviews")
@@ -599,7 +767,7 @@ def compute_risk_score_and_store(sb, app_id: str, vendor_id: str, risk_factors: 
             })
     prior_reviews.sort(key=lambda x: x["version"])
 
-    notified_factors = _compute_notified_factors(risk_factors, user_flags)
+    notified_factors = _compute_notified_factors(risk_factors, user_flags, unreadable_docs)
     base = _base_score(risk_factors)
     delta = _cross_version_delta(prior_reviews, risk_factors)
     final = max(0, min(100, base + delta))
@@ -635,6 +803,7 @@ def compute_risk_score_and_store(sb, app_id: str, vendor_id: str, risk_factors: 
         logger.info(f"auto_rejected: app_id={app_id}")
 
     logger.info(f"risk_score: app_id={app_id} base={base} delta={delta} final={final} decision={decision} notified={notified_factors}")
+    return decision
 
 
 def run_ai_pipeline(app_id: str, vendor_id: str):
@@ -659,25 +828,58 @@ def run_ai_pipeline(app_id: str, vendor_id: str):
             .data
         )
         seen: dict = {}
+        # Pass 1: prefer newest doc with successful OCR per doc_type
         for d in all_docs:
             if d.get("ocr_json") is not None and d["doc_type"] not in seen:
                 seen[d["doc_type"]] = d
+        # Pass 2: for doc_types with no successful OCR, include newest failed doc
+        # so ocr_summary shows "failed" status instead of silently treating as not_applicable
+        for d in all_docs:
+            dt = d["doc_type"]
+            if dt not in seen and d.get("ocr_status") == "failed":
+                seen[dt] = d
         docs = list(seen.values())
         ocr_summary = _build_ocr_summary(docs)
         exact_matches = _compute_exact_matches(form, ocr_summary)
 
         result = _call_llm(form, ocr_summary, exact_matches)
-        risk_factors = result.get("risk_factors", [])
-        user_flags   = result.get("user_flags", [])
+        risk_factors    = result.get("risk_factors", [])
+        user_flags      = result.get("user_flags", [])
+        unreadable_docs = result.get("unreadable_docs", [])
 
         _upsert_review(sb, app_id, vendor_id, "done", {
             "user_flags":      user_flags,
             "risk_factors":    risk_factors,
-            "unreadable_docs": result.get("unreadable_docs", []),
+            "unreadable_docs": unreadable_docs,
         })
 
-        compute_risk_score_and_store(sb, app_id, vendor_id, risk_factors, user_flags)
+        decision = compute_risk_score_and_store(sb, app_id, vendor_id, risk_factors, user_flags, unreadable_docs)
         logger.info(f"ai_pipeline: done app_id={app_id}")
+
+        # Email vendor if there are flags to fix (any decision except approved/rejected).
+        # Idempotency: claim email_sent_at atomically — skip if another process already sent.
+        if user_flags and decision != "rejected":
+            now = datetime.now(timezone.utc).isoformat()
+            claimed = (
+                sb.table("reviews")
+                .update({"email_sent_at": now})
+                .eq("application_id", app_id)
+                .is_("email_sent_at", "null")
+                .execute()
+            )
+            if claimed.data:
+                try:
+                    send_vendor_flags_email(
+                        contact_email=form.get("contact_email", ""),
+                        company_name=form.get("company_name", "Vendor"),
+                        version=form.get("version", 1),
+                        user_flags=user_flags,
+                        unreadable_docs=unreadable_docs,
+                    )
+                except Exception as e:
+                    logger.error(f"email_send_failed app_id={app_id} err={e}")
+            else:
+                logger.info(f"email_skip already_claimed app_id={app_id}")
 
     except Exception as e:
         logger.error(f"ai_pipeline: failed app_id={app_id} err={e}")
