@@ -27,11 +27,11 @@ An end-to-end vendor onboarding platform with AI-powered risk scoring, OCR docum
 
 Three pre-built escalation scenarios in [`test_cases/`](./test_cases/).
 
-| Case | Folder | Email |
-|---|---|---|
-| Case 1 — Error Then Approved | [`case_01_error_then_approved/`](./test_cases/case_01_error_then_approved/) | anita@crescendotech.in |
-| Case 2 — High Risk Approved | [`case_02_high_risk_approved/`](./test_cases/case_02_high_risk_approved/) | deepak@nexaflow.io |
-| Case 3 — Scammer Rejected | [`case_03_scammer_rejected/`](./test_cases/case_03_scammer_rejected/) | suresh@vortexglobal.tech |
+| Case | Email |
+|---|---|
+| [Case 1](./test_cases/case_01_error_then_approved/) | anita@crescendotech.in |
+| [Case 2](./test_cases/case_02_high_risk_approved/) | deepak@nexaflow.io |
+| [Case 3](./test_cases/case_03_scammer_rejected/) | suresh@vortexglobal.tech |
 
 ---
 
