@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Manan — Engineering Mindset Scorecard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --panel2: #1f2330;
+    --ink: #e7eaf0;
+    --muted: #8b93a7;
+    --accent: #7aa2ff;
+    --accent2: #ffb86b;
+    --good: #7dd87d;
+    --warn: #ffd166;
+    --bad: #ff7a7a;
+    --grid: rgba(255,255,255,0.08);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.5;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 32px 24px 80px; }
+  header { margin-bottom: 28px; }
+  h1 { margin: 0 0 6px; font-size: 28px; letter-spacing: -0.5px; }
+  .subtitle { color: var(--muted); font-size: 14px; }
+  .overall {
+    display: inline-flex; align-items: baseline; gap: 10px;
+    margin-top: 14px; padding: 10px 16px;
+    background: linear-gradient(135deg, #2a3450, #1a2235);
+    border: 1px solid rgba(122,162,255,0.3);
+    border-radius: 10px;
+  }
+  .overall .num { font-size: 32px; font-weight: 700; color: var(--accent); }
+  .overall .lbl { color: var(--muted); font-size: 13px; }
+  .grid {
+    display: grid; gap: 16px;
+    grid-template-columns: repeat(12, 1fr);
+    margin-top: 8px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 12px;
+    padding: 18px 18px 14px;
+  }
+  .card h2 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+  .card .hint { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+  .col-12 { grid-column: span 12; }
+  .col-8 { grid-column: span 8; }
+  .col-6 { grid-column: span 6; }
+  .col-4 { grid-column: span 4; }
+  @media (max-width: 900px) {
+    .col-8, .col-6, .col-4 { grid-column: span 12; }
+  }
+  .chart-box { position: relative; height: 320px; }
+  .chart-box.tall { height: 420px; }
+  .chart-box.short { height: 260px; }
+  .stat-row {
+    display: grid; gap: 12px;
+    grid-template-columns: repeat(4, 1fr);
+    margin-bottom: 16px;
+  }
+  @media (max-width: 700px) {
+    .stat-row { grid-template-columns: repeat(2, 1fr); }
+  }
+  .stat {
+    background: var(--panel2);
+    border-radius: 10px;
+    padding: 14px 14px;
+  }
+  .stat .v { font-size: 24px; font-weight: 700; color: var(--ink); }
+  .stat .l { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+  .summary { margin-top: 20px; }
+  .summary p { margin: 8px 0; color: #c8cdda; }
+  .summary strong { color: var(--ink); }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .pill-good { background: rgba(125,216,125,0.15); color: var(--good); }
+  .pill-warn { background: rgba(255,209,102,0.15); color: var(--warn); }
+  table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--grid); font-size: 13px; }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+  td.score { font-weight: 700; color: var(--accent); }
+  footer { margin-top: 32px; color: var(--muted); font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Engineering Mindset Scorecard — Manan</h1>
+  <div class="subtitle">Vendor Onboarding Project · May 12 – May 17, 2026 · 354 prompts · 6 days</div>
+  <div class="overall">
+    <span class="num">88.5</span>
+    <span class="lbl">Overall (avg of 10 dimensions, out of 100)</span>
+  </div>
+</header>
+
+<div class="stat-row">
+  <div class="stat"><div class="v">354</div><div class="l">Total Prompts</div></div>
+  <div class="stat"><div class="v">6</div><div class="l">Days Active</div></div>
+  <div class="stat"><div class="v">59</div><div class="l">Avg Prompts / Day</div></div>
+  <div class="stat"><div class="v">154</div><div class="l">Peak Day (May 17)</div></div>
+</div>
+
+<div class="grid">
+
+  <!-- Radar of 10 dimensions -->
+  <div class="card col-6">
+    <h2>Ten-Dimension Profile</h2>
+    <div class="hint">Radar of all rated dimensions (out of 100)</div>
+    <div class="chart-box tall"><canvas id="radar"></canvas></div>
+  </div>
+
+  <!-- Horizontal bar of dimension scores -->
+  <div class="card col-6">
+    <h2>Ranked Strengths</h2>
+    <div class="hint">Strongest to weakest dimension</div>
+    <div class="chart-box tall"><canvas id="ranked"></canvas></div>
+  </div>
+
+  <!-- Prompts per day -->
+  <div class="card col-8">
+    <h2>Prompt Volume by Day</h2>
+    <div class="hint">A clear J-curve: light setup, heavy build, peak on final integration day</div>
+    <div class="chart-box"><canvas id="perDay"></canvas></div>
+  </div>
+
+  <!-- Prompt type donut -->
+  <div class="card col-4">
+    <h2>Prompt Type Mix</h2>
+    <div class="hint">What kind of work the prompts represent</div>
+    <div class="chart-box"><canvas id="promptType"></canvas></div>
+  </div>
+
+  <!-- Cumulative line -->
+  <div class="card col-6">
+    <h2>Cumulative Prompts</h2>
+    <div class="hint">How fast the project compounded</div>
+    <div class="chart-box"><canvas id="cumulative"></canvas></div>
+  </div>
+
+  <!-- Phase / topic stacked bar -->
+  <div class="card col-6">
+    <h2>Effort by Phase</h2>
+    <div class="hint">Approximate prompt share across major phases</div>
+    <div class="chart-box"><canvas id="phase"></canvas></div>
+  </div>
+
+  <!-- Score table -->
+  <div class="card col-12">
+    <h2>Score Table</h2>
+    <div class="hint">All ten dimensions with the one-line "clicked / improve" read</div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:24%">Dimension</th>
+          <th style="width:8%">Score</th>
+          <th style="width:34%">What Clicked</th>
+          <th style="width:34%">What Could Improve</th>
+        </tr>
+      </thead>
+      <tbody id="scoreTable"></tbody>
+    </table>
+  </div>
+
+  <!-- Summary -->
+  <div class="card col-12 summary">
+    <h2>One-line Read</h2>
+    <p><span class="pill pill-good">What clicked</span> &nbsp; You operated like a senior PM-engineer hybrid — relentlessly questioned defaults, demanded plain-English explanations, and ruthlessly cut scope to ship a demo.</p>
+    <p><span class="pill pill-warn">What could improve</span> &nbsp; Prompt hygiene (typos, run-on logic) cost you rework cycles — tighten the input and you compound the output.</p>
+  </div>
+
+</div>
+
+<footer>Generated from <code>claude_code_review.md</code> + <code>claude_prompts_log.md</code> · May 17, 2026</footer>
+
+</div>
+
+<script>
+const ink = '#e7eaf0';
+const muted = '#8b93a7';
+const grid = 'rgba(255,255,255,0.08)';
+const accent = '#7aa2ff';
+const accent2 = '#ffb86b';
+
+Chart.defaults.color = muted;
+Chart.defaults.borderColor = grid;
+Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
+
+const dimensions = [
+  { name: 'First-Principles Thinking', score: 86, clicked: 'Pushed back on arbitrary caps (MSME, employee count, turnover) and re-derived from purpose.', improve: 'A few "why" probes came after implementation rather than before.' },
+  { name: 'Comfort with Ambiguity',    score: 89, clicked: 'Switched Groq → Ollama → Groq smoothly; tolerated half-built states.', improve: 'Spiraled on edge-case threshold debates (76 vs 85 vs 90).' },
+  { name: 'Relentless Curiosity',      score: 93, clicked: 'Drove pipeline depth — few-shot examples, exact_match_context labels, context-window math.', improve: 'Occasionally diluted focus mid-project ("how to change your thinking?").' },
+  { name: 'Understanding Trade-offs',  score: 88, clicked: 'Hybrid "score in code, reasoning in LLM" was a textbook trade-off call.', improve: 'Some trade-offs were debated longer than they were worth.' },
+  { name: 'The 80/20 Rule',            score: 91, clicked: 'Killed analytics to a stub, deferred ISO-date bug, removed 10 stale tests.', improve: 'Long tail on AI prompt polish on Day 6 was past the 80/20 line.' },
+  { name: 'Systems Thinking',          score: 89, clicked: 'Caught doc-versioning, parallel-onboarding, email atomicity early.', improve: 'A couple of cross-cutting bugs (application_id null) bit before being spotted.' },
+  { name: 'Ego-less Collaboration',    score: 94, clicked: '"Discuss without any bias" 11+ times — treated Claude as peer reviewer.', improve: 'Occasionally deferred too much on small UX calls.' },
+  { name: 'Translating Complexity',    score: 78, clicked: 'Demanded plain English in user-facing docs ("things should be trivial").', improve: 'Own prompts had heavy typos / run-on logic — cleaning these would 2× hit-rate.' },
+  { name: 'Debugging Mindset',         score: 90, clicked: 'Two-pass OCR dedup, traced multi-row bug to draft+submit interplay.', improve: 'Bounced on a few bugs for 4–5 prompts before insisting on recheck.' },
+  { name: 'Continuous Learning',       score: 87, clicked: 'Day-over-day complexity ramp was steady — no phase-skipping.', improve: 'No personal notes captured — learnings stayed inside product .md files.' }
+];
+
+// ---- Radar ----
+new Chart(document.getElementById('radar'), {
+  type: 'radar',
+  data: {
+    labels: dimensions.map(d => d.name.replace(' ', '\n')),
+    datasets: [{
+      label: 'Score',
+      data: dimensions.map(d => d.score),
+      backgroundColor: 'rgba(122,162,255,0.18)',
+      borderColor: accent,
+      borderWidth: 2,
+      pointBackgroundColor: accent,
+      pointRadius: 3
+    }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      r: {
+        min: 60, max: 100,
+        ticks: { stepSize: 10, color: muted, backdropColor: 'transparent', font: { size: 10 } },
+        grid: { color: grid }, angleLines: { color: grid },
+        pointLabels: { color: ink, font: { size: 10 } }
+      }
+    }
+  }
+});
+
+// ---- Ranked horizontal bar ----
+const sorted = [...dimensions].sort((a,b) => b.score - a.score);
+const colors = sorted.map(d => d.score >= 90 ? '#7dd87d' : d.score >= 85 ? '#7aa2ff' : '#ffd166');
+new Chart(document.getElementById('ranked'), {
+  type: 'bar',
+  data: {
+    labels: sorted.map(d => d.name),
+    datasets: [{ label: 'Score', data: sorted.map(d => d.score), backgroundColor: colors, borderRadius: 6 }]
+  },
+  options: {
+    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => ` ${c.parsed.x} / 100` } } },
+    scales: {
+      x: { min: 70, max: 100, grid: { color: grid }, ticks: { color: muted } },
+      y: { grid: { display: false }, ticks: { color: ink, font: { size: 11 } } }
+    }
+  }
+});
+
+// ---- Prompts per day ----
+const days = ['May 12','May 13','May 14','May 15','May 16','May 17'];
+const counts = [6, 55, 41, 26, 72, 154];
+const phases = ['Setup','Backend + Frontend','Data Gen + Validation','Bug Fixes + UX','OCR + AI Arch','AI Pipeline + Admin'];
+new Chart(document.getElementById('perDay'), {
+  type: 'bar',
+  data: {
+    labels: days,
+    datasets: [{
+      label: 'Prompts',
+      data: counts,
+      backgroundColor: counts.map(c => c >= 100 ? '#ff7a7a' : c >= 50 ? accent2 : accent),
+      borderRadius: 6
+    }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: { callbacks: { afterLabel: ctx => 'Phase: ' + phases[ctx.dataIndex] } }
+    },
+    scales: {
+      x: { grid: { display: false }, ticks: { color: ink } },
+      y: { beginAtZero: true, grid: { color: grid }, ticks: { color: muted } }
+    }
+  }
+});
+
+// ---- Prompt type donut ----
+new Chart(document.getElementById('promptType'), {
+  type: 'doughnut',
+  data: {
+    labels: ['Discuss / Why / Explain', 'Direct Build', 'Bug Reports', 'Doc Sync', 'Pasted Errors / Screens'],
+    datasets: [{
+      data: [38, 22, 18, 12, 10],
+      backgroundColor: ['#7aa2ff','#7dd87d','#ff7a7a','#ffd166','#c490ff'],
+      borderColor: '#181b22', borderWidth: 2
+    }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false, cutout: '60%',
+    plugins: {
+      legend: { position: 'bottom', labels: { color: ink, font: { size: 11 }, padding: 10, boxWidth: 12 } },
+      tooltip: { callbacks: { label: c => ` ${c.label}: ${c.parsed}%` } }
+    }
+  }
+});
+
+// ---- Cumulative line ----
+const cum = counts.reduce((acc, c, i) => { acc.push((acc[i-1] || 0) + c); return acc; }, []);
+new Chart(document.getElementById('cumulative'), {
+  type: 'line',
+  data: {
+    labels: days,
+    datasets: [{
+      label: 'Cumulative Prompts',
+      data: cum,
+      borderColor: accent2,
+      backgroundColor: 'rgba(255,184,107,0.15)',
+      fill: true, tension: 0.3, pointRadius: 4, pointBackgroundColor: accent2
+    }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { grid: { display: false }, ticks: { color: ink } },
+      y: { beginAtZero: true, grid: { color: grid }, ticks: { color: muted } }
+    }
+  }
+});
+
+// ---- Phase stacked ----
+const phaseShares = {
+  'Setup':                  [6,  0,  0,  0,  0,  0],
+  'Backend':                [0, 30,  0,  0,  0,  0],
+  'Frontend':               [0, 15,  0,  0,  0,  0],
+  'Data Generator':         [0, 10, 25,  0,  0,  0],
+  'Validation / Bug Fixes': [0,  0, 16, 26,  6,  4],
+  'OCR Pipeline':           [0,  0,  0,  0, 30,  4],
+  'AI Pipeline + Scoring':  [0,  0,  0,  0, 36, 76],
+  'Admin + Email':          [0,  0,  0,  0,  0, 40],
+  'Docs / GitHub':          [0,  0,  0,  0,  0, 30]
+};
+const palette = ['#7aa2ff','#7dd87d','#ffd166','#ffb86b','#ff7a7a','#c490ff','#5ed3f3','#f37cb6','#8be9c0'];
+new Chart(document.getElementById('phase'), {
+  type: 'bar',
+  data: {
+    labels: days,
+    datasets: Object.entries(phaseShares).map(([name, data], i) => ({
+      label: name, data, backgroundColor: palette[i % palette.length], borderRadius: 4
+    }))
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: {
+      legend: { position: 'bottom', labels: { color: ink, font: { size: 10 }, padding: 8, boxWidth: 10 } }
+    },
+    scales: {
+      x: { stacked: true, grid: { display: false }, ticks: { color: ink } },
+      y: { stacked: true, grid: { color: grid }, ticks: { color: muted } }
+    }
+  }
+});
+
+// ---- Score Table ----
+const tbody = document.getElementById('scoreTable');
+dimensions.forEach(d => {
+  const row = document.createElement('tr');
+  row.innerHTML = `
+    <td>${d.name}</td>
+    <td class="score">${d.score}</td>
+    <td>${d.clicked}</td>
+    <td>${d.improve}</td>
+  `;
+  tbody.appendChild(row);
+});
+</script>
+
+</body>
+</html>
