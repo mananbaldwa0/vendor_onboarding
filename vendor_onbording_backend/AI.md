@@ -150,8 +150,10 @@ run_ai_pipeline(app_id, vendor_id)
     │
     ├─ fetch application row (all 31 form fields)
     │
-    ├─ fetch all documents WHERE application_id = app_id
-    │    → get doc_type, ocr_json, ocr_status per doc
+    ├─ fetch latest doc per doc_type across ALL vendor versions (not just current app_id)
+    │    → SELECT doc_type, ocr_json, ocr_status ORDER BY uploaded_at DESC, dedupe by doc_type
+    │    → if vendor re-uploaded doc in v2 → picks v2 (newer). if not re-uploaded → picks v1.
+    │    → only includes docs where ocr_json IS NOT NULL (OCR has run)
     │
     ├─ _build_ocr_summary()
     │    → flat dict: { doc_type: { status, ...extracted_fields } }

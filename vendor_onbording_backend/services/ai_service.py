@@ -647,7 +647,22 @@ def run_ai_pipeline(app_id: str, vendor_id: str):
             raise ValueError(f"application {app_id} not found")
         form = app_row.data[0]
 
-        docs = sb.table("documents").select("doc_type, ocr_json, ocr_status").eq("application_id", app_id).execute().data
+        # Fetch latest OCR per doc_type across ALL vendor versions.
+        # If vendor re-uploaded a doc in v2, it has a newer uploaded_at → picked.
+        # If not re-uploaded, v1's OCR result is used — ensures cross-version doc carry-forward.
+        all_docs = (
+            sb.table("documents")
+            .select("doc_type, ocr_json, ocr_status, uploaded_at")
+            .eq("vendor_id", vendor_id)
+            .order("uploaded_at", desc=True)
+            .execute()
+            .data
+        )
+        seen: dict = {}
+        for d in all_docs:
+            if d.get("ocr_json") is not None and d["doc_type"] not in seen:
+                seen[d["doc_type"]] = d
+        docs = list(seen.values())
         ocr_summary = _build_ocr_summary(docs)
         exact_matches = _compute_exact_matches(form, ocr_summary)
 
