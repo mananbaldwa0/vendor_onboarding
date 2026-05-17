@@ -46,7 +46,10 @@ def run_ocr_pipeline(app_id: str, vendor_id: str):
     ).data
 
     if not docs:
-        logger.warning(f"ocr_pipeline: no docs found for app_id={app_id}")
+        # Resubmission with no new uploads — vendor reused existing docs.
+        # Skip re-OCR (already processed), go straight to AI pipeline.
+        logger.info(f"ocr_pipeline: no new docs for app_id={app_id}, skipping to ai_pipeline")
+        run_ai_pipeline(app_id, vendor_id)
         return
 
     for doc in docs:
