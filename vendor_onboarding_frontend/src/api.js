@@ -46,7 +46,7 @@ export async function getStatus() {
 }
 
 export async function saveDraft(data) {
-  const res = await fetch(`/api/application/draft`, {
+  const res = await fetch(`${BASE}/application/draft`, {
     method: 'POST',
     headers: headers(),
     body: JSON.stringify(data)
